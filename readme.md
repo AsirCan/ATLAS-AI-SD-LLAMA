@@ -1,69 +1,96 @@
-# 🌍 ATLAS WEB ASİSTAN
+# 🌍 ATLAS AI - Local Voice & Visual Assistant
 
-Bu proje, gelişmiş yapay zeka modellerini (Llama 3, Stable Diffusion) kullanarak çalışan sesli ve görsel bir asistandır.
+**Atlas AI** is a fully local, agentic voice assistant capable of generating real-time visuals, news videos, and managing Instagram content using advanced AI models.
 
-## 📋 Gereksinimler
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
+![React](https://img.shields.io/badge/React-18-blue?style=for-the-badge&logo=react)
+![Stable Diffusion](https://img.shields.io/badge/Stable%20Diffusion-XL-orange?style=for-the-badge)
+![Llama 3](https://img.shields.io/badge/LLM-Llama%203-blueviolet?style=for-the-badge)
 
-Kuruluma başlamadan önce bilgisayarınızda şunların yüklü olduğundan emin olun:
+## ✨ Features
 
-1.  **Python 3.10+** (Yüklerken "Add to PATH" işaretlemeyi unutmayın!)
-2.  **Git**
-3.  **Node.js** (Web arayüzü için)
+- **🗣️ Voice Interaction:** Talk to Atlas naturally using Speech-to-Text and TTS (Fahrettin model).
+- **🎨 Image Generation:** Creates high-quality images using Stable Diffusion XL (via Forge WebUI) based on conversation context.
+- **📰 News Agent:** Fetches real-world news, writes scripts, generates visuals, and produces narrated video reports.
+- **📸 Instagram Integration:** Can automatically upload generated content to Instagram as posts or carousels.
+- **🧠 Local Intelligence:** Powered by Llama 3 (via Ollama) running entirely on your machine.
+- **💻 Modern Web UI:** sleek, responsive React frontend.
 
----
+## 🛠️ Prerequisites
 
-## 🚀 Hızlı Kurulum
+Before you begin, ensure you have the following installed:
 
-### Adım 1: Projeyi İndirin
-Terminali açın ve projeyi masaüstüne (veya istediğiniz yere) indirin:
+- **OS:** Windows 10/11 (Recommended)
+- **GPU:** NVIDIA GPU with 8GB+ VRAM (Recommended for SDXL)
+- **Software:**
+  - [Python 3.10+](https://www.python.org/downloads/) (Make sure to check **"Add to PATH"**)
+  - [Git](https://git-scm.com/)
+  - [Node.js](https://nodejs.org/) (For the web interface)
+  - [Ollama](https://ollama.com/) (For Llama 3)
+
+## 🚀 Installation & Setup
+
+### 1. Clone the Repository
 ```bash
-git clone https://github.com/KULLANICI_ADI/Ses_Asistani.git
-cd Ses_Asistani
+git clone https://github.com/AsirCan/ATLAS-AI-SD-LLAMA.git
+cd ATLAS-AI-SD-LLAMA
 ```
 
-### Adım 2: Otomatik Kurulumu Başlatın
-Sanal ortamı oluşturmak, gerekli kütüphaneleri yüklemek ve yapay zeka modellerini indirmek için şu komutu çalıştırın:
+### 2. Configure Credentials
+**Critical Step:** This project uses a secure `.env` file for credentials.
+1.  Copy the example file:
+    ```bash
+    copy .env.example .env
+    ```
+2.  Open `.env` with a text editor and fill in your details:
+    ```ini
+    INSTA_USERNAME=your_username
+    INSTA_PASSWORD=your_password
+    ```
 
-```cmd
+### 3. Automated Install
+Run the installer script to set up the virtual environment, download dependencies, and set up Stable Diffusion (Forge):
+```bash
 python install.py
 ```
-*(Bu işlem internet hızınıza bağlı olarak zaman alabilir. Lütfen bitmesini bekleyin.)*
+*(This may take a while as it downloads large AI models.)*
 
-### Adım 3: Frontend Paketlerini Yükleyin
-Web arayüzünün çalışması için frontend paketlerini bir kez yüklemeniz gerekir:
-
-```cmd
+### 4. Install Frontend Dependencies
+```bash
 cd web/frontend
 npm install
 cd ../..
 ```
 
----
+## ▶️ Usage
 
-## ▶️ Başlatma
+To start Atlas (Backend + Frontend + Browser):
 
-Atlas'ı başlatmak için tek yapmanız gereken:
-
-```cmd
+```bash
 python run.py
 ```
 
-Bu komut:
-1.  Backend'i (Beyin) başlatır.
-2.  Frontend'i (Arayüz) başlatır.
-3.  Tarayıcınızı otomatik açar.
+- **Voice Command:** Say "Hey Atlas" to wake it up.
+- **Web Interface:** Opens automatically at `http://localhost:5173`.
 
-Çıkmak için terminalde `CTRL+C` yapmanız yeterlidir.
+## 📂 Project Structure
 
----
+```
+├── core/               # Python backend logic (AI agents, config)
+├── web/
+│   ├── backend/        # FastAPI server
+│   └── frontend/       # React application
+├── models/             # Local AI models (STT/TTS)
+├── install.py          # Setup script
+└── run.py              # Launcher script
+```
 
-### Manuel Başlatma (Geliştiriciler İçin)
-Eğer ayrı ayrı görmek isterseniz:
+## 🛡️ Privacy & Security
+- **Credentials:** Your Instagram password is strictly stored in your local `.env` file and is **never** uploaded to GitHub.
+- **Local Processing:** All voice and image processing happens locally on your machine.
 
----
+## 🤝 Contributing
+Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
 
-## ❓ Sorun Giderme
-
--   **"python bulunamadı" hatası:** Python'u kurarken "Add to PATH" seçeneğini işaretlediğinizden emin olun.
--   **Stable Diffusion hatası:** İlk kurulumda modelin (6GB) inmesi gerekebilir, internet bağlantınızı kontrol edin.
--   **Ses gelmiyor:** Hoparlör sesini kontrol edin ve tarayıcı izinlerini verin.
+## 📄 License
+[MIT](https://choosealicense.com/licenses/mit/)
