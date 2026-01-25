@@ -1,0 +1,141 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-bg: rgba(10, 10, 20, 0.4);
+}
+
+body {
+  @apply bg-dark-900 text-white antialiased overflow-hidden;
+}
+
+::selection {
+  background-color: rgba(0, 212, 255, 0.3);
+  color: white;
+  font-family: 'Inter', system-ui, sans-serif;
+  cursor: crosshair;
+  /* Futuristic cursor feel */
+}
+
+/* Custom Scrollbar - Minimal & Glowing */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #7000ff, #00d4ff);
+  border-radius: 10px;
+}
+
+/* --- BACKGROUND UTILITIES --- */
+.bg-living-data {
+  background-color: #0B0B15;
+  /* Matching dark-900 base */
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
+.bg-living-data::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* Very subtle gradient to prevent flatness but keep it dark */
+  background: radial-gradient(circle at 50% 0%, #151525, #0B0B15 60%);
+  opacity: 1;
+  z-index: -1;
+}
+
+/* Old animations removed */
+
+/* --- HOLOGRAPHIC GLASS UI --- */
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  border-radius: 24px;
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  position: relative;
+  z-index: 10;
+}
+
+.glass:hover {
+  box-shadow:
+    0 8px 32px 0 rgba(0, 0, 0, 0.5),
+    0 0 15px rgba(112, 0, 255, 0.2);
+  /* Soft purple glow */
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.glass-input {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  color: white;
+  transition: all 0.3s ease;
+}
+
+.glass-input:focus {
+  background: rgba(0, 0, 0, 0.4);
+  border-color: #00d4ff;
+  box-shadow: 0 0 15px rgba(0, 212, 255, 0.3);
+  outline: none;
+}
+
+/* --- MESSAGE ANIMATIONS --- */
+.message-appear {
+  animation: slideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  opacity: 0;
+  transform: scale(0.9) translateY(10px);
+}
+
+@keyframes slideIn {
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* --- MIC BUTTON PULSE (Advanced) --- */
+.mic-pulse {
+  background: linear-gradient(135deg, #ff0055 0%, #ff5500 100%) !important;
+  color: white !important;
+  box-shadow: 0 0 20px rgba(255, 0, 85, 0.5);
+  animation: atomicPulse 1.5s infinite;
+}
+
+@keyframes atomicPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 0, 85, 0.7);
+  }
+
+  70% {
+    box-shadow: 0 0 0 20px rgba(255, 0, 85, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 0, 85, 0);
+  }
+}
+
+/* --- TYPOGRAPHY & EXTRA --- */
+h1 {
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+}
+
+button {
+  transition: all 0.2s;
+}
+
+button:active {
+  transform: scale(0.92);
+}
