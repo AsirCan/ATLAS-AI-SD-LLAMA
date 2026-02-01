@@ -4,6 +4,8 @@ import webbrowser
 import os
 import sys
 import signal
+import socket
+from shutil import which
 
 # Renkler
 GREEN = "\033[92m"
@@ -11,7 +13,28 @@ YELLOW = "\033[93m"
 RED = "\033[91m"
 RESET = "\033[0m"
 
-APP_URL = "http://localhost:5173"
+APP_URL = "http://127.0.0.1:5173"
+
+def wait_for_port(host, port, timeout_sec=60):
+    """Wait until a TCP port is accepting connections."""
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+def find_npm_cmd():
+    """Find npm executable (Windows uses npm.cmd)."""
+    return which("npm") or which("npm.cmd") or which("npm.exe")
+
+def is_port_in_use(host, port):
+    """Return True if port is already in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        return s.connect_ex((host, port)) == 0
 
 def check_venv():
     """Sanal ortamda mıyız kontrol eder. Değilse sanal ortam Python'u ile yeniden başlatır."""
@@ -46,9 +69,19 @@ def run_app():
 
         # 3. Frontend Başlat
         print(f"🎨 Frontend arayüzü açılıyor...")
-        # npm run dev shell=True gerektirebilir (Windows'ta npm.cmd)
+        npm_cmd = find_npm_cmd()
+        if not npm_cmd:
+            print(f"{RED}❌ npm bulunamadı! Node.js LTS kurulu mu?{RESET}")
+            print(f"{YELLOW}Çözüm: Node.js kurun ve yeni terminal açıp tekrar deneyin.{RESET}")
+            return
+
+        host, port = "127.0.0.1", 5173
+        if is_port_in_use(host, port):
+            print(f"{YELLOW}⚠️ {host}:{port} zaten kullanımda. Vite farklı port seçebilir.{RESET}")
+
+        # Force Vite host/port for predictable URL
         frontend_process = subprocess.Popen(
-            ["npm", "run", "dev"],
+            [npm_cmd, "run", "dev", "--", "--host", host, "--port", str(port)],
             cwd=os.path.join(os.getcwd(), "web", "frontend"),
             shell=True
         )
@@ -56,9 +89,12 @@ def run_app():
 
         # 4. Tarayıcıyı Aç
         print(f"🌍 Tarayıcı bekleniyor...")
-        time.sleep(5) # Serverların kalkması için süre
-        webbrowser.open(APP_URL)
-        print(f"\n{GREEN}✅ Sistem Çalışıyor! {APP_URL}{RESET}")
+        if wait_for_port(host, port, timeout_sec=60):
+            webbrowser.open(APP_URL)
+            print(f"\n{GREEN}✅ Sistem Çalışıyor! {APP_URL}{RESET}")
+        else:
+            print(f"\n{YELLOW}⚠️ Frontend portu açılmadı: {host}:{port}{RESET}")
+            print(f"{YELLOW}Lütfen terminal loglarını kontrol edin ve {APP_URL} adresini manuel açın.{RESET}")
         print("Backend loglarını burada görebilirsiniz...\n")
 
         # Sürekli bekle

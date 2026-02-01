@@ -5,6 +5,7 @@ import shutil
 import ctypes
 import io
 import zipfile
+from shutil import which
 
 # ================= AYARLAR =================
 FORGE_PATH = r"C:\Forge"
@@ -35,6 +36,78 @@ SD_MODEL_FILENAME = "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
 PIPER_WINDOWS_ZIP_URL = "https://sourceforge.net/projects/piper-tts.mirror/files/2023.11.14-2/piper_windows_amd64.zip/download"
 PIPER_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "piper")
 PIPER_EXE_PATH = os.path.join(PIPER_TOOLS_DIR, "piper.exe")
+PIPER_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+PIPER_TR_MODEL_NAME = "tr_TR-fahrettin-medium.onnx"
+PIPER_TR_CONFIG_NAME = "tr_TR-fahrettin-medium.onnx.json"
+def _hf_list_files(repo):
+    """Return a list of filenames in a Hugging Face repo via the API."""
+    import requests  # noqa: E402
+
+    api_url = f"https://huggingface.co/api/models/{repo}"
+    r = requests.get(api_url, timeout=30)
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    siblings = data.get("siblings", [])
+    return [s.get("rfilename") for s in siblings if s.get("rfilename")]
+
+def _build_piper_url_candidates():
+    """Build a list of possible Hugging Face URLs for the Fahrettin model."""
+    repos = [
+        "speaches-ai/piper-tr_TR-fahrettin-medium",
+        "speeches-ai/piper-tr_TR-fahrettin-medium",
+    ]
+
+    model_urls = []
+    config_urls = []
+
+    # Try to discover files dynamically via HF API
+    for repo in repos:
+        files = _hf_list_files(repo)
+        if not files:
+            continue
+        onnx_files = [f for f in files if f.lower().endswith(".onnx")]
+        json_files = [f for f in files if f.lower().endswith(".json")]
+        if not onnx_files or not json_files:
+            continue
+
+        # Prefer config.json if present, otherwise any .onnx.json
+        config_file = None
+        for f in json_files:
+            if f.lower().endswith("config.json"):
+                config_file = f
+                break
+        if not config_file:
+            for f in json_files:
+                if f.lower().endswith(".onnx.json"):
+                    config_file = f
+                    break
+        if not config_file:
+            continue
+
+        model_file = onnx_files[0]
+        base = f"https://huggingface.co/{repo}/resolve/main/"
+        model_urls.append(base + model_file)
+        model_urls.append(base + model_file + "?download=true")
+        config_urls.append(base + config_file)
+        config_urls.append(base + config_file + "?download=true")
+
+    # Legacy rhasspy path (removed Dec 30, 2025, keep as fallback)
+    rhasspy_base = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
+    model_urls.append(
+        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx"
+    )
+    model_urls.append(
+        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx?download=true"
+    )
+    config_urls.append(
+        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json"
+    )
+    config_urls.append(
+        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json?download=true"
+    )
+
+    return model_urls, config_urls
 
 # RENKLER
 GREEN = "\033[92m"
@@ -176,6 +249,66 @@ def install_piper_windows_binary_if_needed():
         print(f"{RED}❌ Piper otomatik kurulum hatası: {e}{RESET}")
         print(f"{YELLOW}Manuel çözüm: standalone Piper indirip .env içine PIPER_BIN=C:\\...\\piper.exe yazın.{RESET}")
 
+def _download_file(url, dest_path):
+    """Download a file with streaming to avoid loading into memory."""
+    import requests  # noqa: E402
+
+    with requests.get(url, stream=True, timeout=300) as r:
+        r.raise_for_status()
+        with open(dest_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+def _try_download(urls, dest_path):
+    """Try multiple URLs, return True on success."""
+    last_err = None
+    for url in urls:
+        try:
+            _download_file(url, dest_path)
+            return True
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    return False
+
+def install_piper_tr_model_if_needed():
+    """Downloads tr_TR-fahrettin-medium model/config into ./models."""
+    print(f"\n{YELLOW}🗣️ Piper Türkçe modeli kontrol ediliyor (fahrettin-medium)...{RESET}")
+
+    os.makedirs(PIPER_MODEL_DIR, exist_ok=True)
+    model_path = os.path.join(PIPER_MODEL_DIR, PIPER_TR_MODEL_NAME)
+    config_path = os.path.join(PIPER_MODEL_DIR, PIPER_TR_CONFIG_NAME)
+
+    # Allow override via env for custom mirrors
+    env_model_url = os.environ.get("PIPER_TR_MODEL_URL")
+    env_config_url = os.environ.get("PIPER_TR_CONFIG_URL")
+    model_urls, config_urls = _build_piper_url_candidates()
+    if env_model_url:
+        model_urls.insert(0, env_model_url)
+    if env_config_url:
+        config_urls.insert(0, env_config_url)
+
+    if os.path.exists(model_path) and os.path.exists(config_path):
+        print(f"{GREEN}✅ Piper modeli zaten mevcut: {model_path}{RESET}")
+        return
+
+    try:
+        if not os.path.exists(model_path):
+            print(f"{YELLOW}⏳ Model indiriliyor...{RESET}")
+            _try_download(model_urls, model_path)
+        if not os.path.exists(config_path):
+            print(f"{YELLOW}⏳ Model config indiriliyor...{RESET}")
+            _try_download(config_urls, config_path)
+        print(f"{GREEN}✅ Piper modeli indirildi: {model_path}{RESET}")
+    except Exception as e:
+        print(f"{RED}❌ Piper model indirme hatası: {e}{RESET}")
+        print(f"{YELLOW}Manuel çözüm: {PIPER_TR_MODEL_NAME} ve {PIPER_TR_CONFIG_NAME} dosyalarını{RESET}")
+        print(f"{YELLOW}models\\ klasörüne koyun.{RESET}")
+        sys.exit(1)
+
 def install_requirements():
     """Gerekli kütüphaneleri yükler."""
     print(f"{YELLOW}📦 Python kütüphaneleri yükleniyor (requirements.txt)...{RESET}")
@@ -209,6 +342,36 @@ def check_git():
         return True
     except FileNotFoundError:
         return False
+
+def _find_npm_cmd():
+    """Return npm executable name if available."""
+    return which("npm") or which("npm.cmd") or which("npm.exe")
+
+def _find_node_cmd():
+    """Return node executable name if available."""
+    return which("node") or which("node.exe")
+
+def install_frontend_deps():
+    """Frontend (Vite/React) dependencies."""
+    print(f"\n{YELLOW}🌐 Frontend bağımlılıkları kuruluyor (npm install)...{RESET}")
+
+    if not _find_node_cmd() or not _find_npm_cmd():
+        print(f"{RED}❌ Node.js / npm bulunamadı!{RESET}")
+        print(f"{YELLOW}Lütfen Node.js LTS kurun: https://nodejs.org/{RESET}")
+        print(f"{YELLOW}Kurulumdan sonra tekrar install.py çalıştırın.{RESET}")
+        sys.exit(1)
+
+    frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "frontend")
+    if not os.path.isdir(frontend_dir):
+        print(f"{RED}❌ Frontend klasörü bulunamadı: {frontend_dir}{RESET}")
+        sys.exit(1)
+
+    try:
+        subprocess.run([_find_npm_cmd(), "install"], cwd=frontend_dir, check=True)
+        print(f"{GREEN}✅ Frontend bağımlılıkları kuruldu.{RESET}")
+    except subprocess.CalledProcessError as e:
+        print(f"{RED}❌ Frontend bağımlılık kurulumu hatası: {e}{RESET}")
+        sys.exit(1)
 
 def install_forge():
     """Forge'u C:\Forge klasörüne indirir."""
@@ -314,6 +477,9 @@ if __name__ == "__main__":
     # 2.1 Piper (TTS) - Windows binary fix (espeakbridge)
     install_piper_windows_binary_if_needed()
 
+    # 2.2 Piper Turkish model (fahrettin-medium)
+    install_piper_tr_model_if_needed()
+
     # 3. Forge Kur
     install_forge()
     
@@ -322,6 +488,9 @@ if __name__ == "__main__":
     
     # 5. Ollama Hazırla
     install_ollama_model()
+
+    # 6. Frontend bağımlılıkları
+    install_frontend_deps()
 
     print(f"\n{GREEN}🎉 KURULUM TAMAMLANDI!{RESET}")
     print(f"{YELLOW}Başlatma (önerilen):{RESET} python run.py")
