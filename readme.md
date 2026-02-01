@@ -138,26 +138,26 @@ python run.py --agent --live
 
 ```mermaid
 graph TD
-    A[UI: Başlat] --> B[Backend: Service Check]
-    B -->|OK| C[Orchestrator: Pipeline Başlat]
+    A["UI: Başlat"] --> B["Backend: Service Check"]
+    B -->|OK| C["Orchestrator: Pipeline Başlat"]
     
-    C --> D[News Agent]
-    D -->|Haberleri Çek & Puanla| E[Risk Agent]
+    C --> D["News Agent"]
+    D -->|"Haberleri Çek & Puanla"| E["Risk Agent"]
     
-    E -->|Riskli?| F{Onay}
-    F -- Evet --> G[Log & Skip]
-    F -- Hayır --> H[Visual Director Agent]
+    E -->|"Riskli?"| F{"Onay"}
+    F -- Evet --> G["Log & Skip"]
+    F -- Hayır --> H["Visual Director Agent"]
     
-    H -->|Prompt Üret| I[Stable Diffusion (Forge)]
-    I -->|Görsel Çizildi| J[Caption Agent]
+    H -->|"Prompt Üret"| I["Stable Diffusion (Forge)"]
+    I -->|"Görsel Çizildi"| J["Caption Agent"]
     
-    J -->|Metin Yazıldı| K[Scheduler Agent]
-    K -->|Zamanlama| L{Mod}
+    J -->|"Metin Yazıldı"| K["Scheduler Agent"]
+    K -->|"Zamanlama"| L{"Mod"}
     
-    L -- Dry Run --> M[Log Çıktısı]
-    L -- Live --> N[Instagram Upload]
+    L -- "Dry Run" --> M["Log Çıktısı"]
+    L -- "Live" --> N["Instagram Upload"]
     
-    N --> O[UI: Tamamlandı]
+    N --> O["UI: Tamamlandı"]
 ```
 
 ### 0) UI/Backend koordinasyonu
