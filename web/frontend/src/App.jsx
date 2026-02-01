@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Mic, Send, Image as ImageIcon, StopCircle, RefreshCw, Volume2, Sparkles, User, Terminal, Instagram, Camera, Upload, Palette, X, Film, Hexagon, Sun, Moon } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Mic, Send, Image as ImageIcon, StopCircle, RefreshCw, Volume2, Sparkles, User, Terminal, Instagram, Camera, Upload, Palette, X, Film, Hexagon, Sun, Moon, Zap, Lightbulb, FileText } from 'lucide-react';
 import { api } from './api';
 import AudioVisualizer from './components/AudioVisualizer';
 import GallerySidebar from './components/GallerySidebar';
@@ -19,7 +19,6 @@ function App() {
     const scrollRef = useRef(null);
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
-    const [audioChunks, setAudioChunks] = useState([]);
 
     // News/Studio/Video Mode State
     const [appMode, setAppMode] = useState('chat'); // 'chat', 'studio', 'video'
@@ -152,11 +151,32 @@ function App() {
         setMessages(prev => [...prev, { role, content, image, duration }]);
     };
 
-    const handleSend = async () => {
-        if (!input.trim()) return;
+    const quickSuggestions = [
+        {
+            icon: Zap,
+            label: 'Günlük içerik konsepti üret (haber tabanlı)',
+            prompt: 'Bugünün gündeminden Instagram için tek görsel konsepti öner.'
+        },
+        {
+            icon: Lightbulb,
+            label: '10’lu carousel için tema ve varyasyonlar',
+            prompt: 'Instagram carousel için tek tema seç ve 10 farklı görsel varyasyonu öner.'
+        },
+        {
+            icon: FileText,
+            label: 'Kısa video senaryosu (3 haber özeti)',
+            prompt: '3 haber için kısa, tempolu video senaryosu üret.'
+        },
+        {
+            icon: Sparkles,
+            label: 'Instagram için güçlü caption + hashtag',
+            prompt: 'Instagram için kısa, vurucu caption ve hashtag öner.'
+        },
+    ];
 
-        const text = input;
-        setInput('');
+    const sendMessage = async (text) => {
+        if (!text || !text.trim() || isProcessing) return;
+
         addMessage('user', text);
         setIsProcessing(true);
 
@@ -179,6 +199,19 @@ function App() {
         } finally {
             setIsProcessing(false);
         }
+    };
+
+    const handleSend = async () => {
+        if (!input.trim() || isProcessing) return;
+        const text = input;
+        setInput('');
+        await sendMessage(text);
+    };
+
+    const handleSuggestion = (text) => {
+        if (isProcessing) return;
+        setInput('');
+        sendMessage(text);
     };
 
     const [audioStream, setAudioStream] = useState(null);
@@ -413,6 +446,8 @@ function App() {
         }
     };
 
+    const hasConversation = messages.some((msg) => msg.role === 'user');
+
     return (
         <div className="h-screen w-full dark:bg-dark-900 bg-gray-50 dark:text-white text-gray-900 font-sans selection:bg-primary/30 overflow-hidden relative flex flex-col transition-colors duration-300">
 
@@ -510,7 +545,7 @@ function App() {
                                                     setGeneratedNews(null);
 
                                                     try {
-                                                        const res = await api.generateCarousel();
+                                                        await api.generateCarousel();
                                                         // Poll for progress
                                                         const interval = setInterval(async () => {
                                                             const p = await api.checkCarouselProgress();
@@ -601,7 +636,7 @@ function App() {
                                                 </button>
                                             </div>
                                             <div className="space-y-3 text-left">
-                                                <p className="text-sm text-gray-400">
+                                                <p className="text-sm dark:text-gray-400 text-gray-500">
                                                     Şifre projeye yazılmaz. Windows Credential Manager'a kaydedilir.
                                                 </p>
                                                 <input
@@ -680,7 +715,7 @@ function App() {
 
                                         <div className="space-y-2">
                                             <p className="text-2xl font-bold animate-pulse text-white">{videoStatusText || "Carousel Hazırlanıyor..."}</p>
-                                            <p className="text-sm text-gray-400">10 farklı görsel oluşturuluyor. Bu işlem birkaç dakika sürebilir.</p>
+                                            <p className="text-sm dark:text-gray-400 text-gray-500">10 farklı görsel oluşturuluyor. Bu işlem birkaç dakika sürebilir.</p>
                                         </div>
                                     </div>
                                 )}
@@ -690,7 +725,7 @@ function App() {
                                         <div className="w-full max-w-2xl space-y-4">
                                             <div className="text-center space-y-2">
                                                 <p className="text-2xl font-bold text-white">Yapay Zeka Ajanı Çalışıyor</p>
-                                                <p className="text-sm text-gray-400">{videoStatusText || "Durum alınıyor..."}</p>
+                                                <p className="text-sm dark:text-gray-400 text-gray-500">{videoStatusText || "Durum alınıyor..."}</p>
                                             </div>
 
                                             <div className="flex items-center justify-center gap-3">
@@ -794,7 +829,7 @@ function App() {
 
                                         <div className="bg-dark-900 p-6 rounded-2xl border border-white/10 shadow-xl flex gap-6 items-start mx-auto w-full max-w-4xl">
                                             <div className="flex-1">
-                                                <h3 className="text-sm text-gray-400 uppercase tracking-wider mb-2 font-bold">Carousel Açıklaması</h3>
+                                                <h3 className="text-sm dark:text-gray-400 text-gray-500 uppercase tracking-wider mb-2 font-bold">Carousel Açıklaması</h3>
                                                 <p className="text-base leading-relaxed whitespace-pre-wrap font-medium text-gray-200">
                                                     {generatedNews.caption}
                                                 </p>
@@ -844,7 +879,7 @@ function App() {
 
                                         <div className="space-y-6">
                                             <div className="bg-dark-900 p-6 rounded-2xl border border-white/10 relative z-10 shadow-xl">
-                                                <h3 className="text-sm text-gray-400 uppercase tracking-wider mb-2 font-bold">Instagram için Oluşturulan Açıklama</h3>
+                                                <h3 className="text-sm dark:text-gray-400 text-gray-500 uppercase tracking-wider mb-2 font-bold">Instagram için Oluşturulan Açıklama</h3>
                                                 <p className="text-lg leading-relaxed whitespace-pre-wrap font-medium text-gray-200">
                                                     {generatedNews.caption}
                                                 </p>
@@ -900,7 +935,7 @@ function App() {
                                             Otomatik olarak 3 adet haber seçilir, görselleri oluşturulur ve haber spikeri tonunda seslendirilerek video haline getirilir.
                                         </p>
                                         <div className="p-6 bg-dark-900 rounded-xl border border-white/10 max-w-lg mx-auto w-full relative z-10 shadow-2xl space-y-4">
-                                            <div className="flex items-center gap-2 text-sm text-gray-400 justify-center">
+                                            <div className="flex items-center gap-2 text-sm dark:text-gray-400 text-gray-500 justify-center">
                                                 <span>• 3 Haber</span>
                                                 <span>• Seslendirme</span>
                                                 <span>• 30 Saniye</span>
@@ -966,7 +1001,7 @@ function App() {
 
                                         <div className="space-y-2">
                                             <p className="text-2xl font-bold animate-pulse text-white">{videoStatusText || "Haber Videosu Hazırlanıyor..."}</p>
-                                            <p className="text-sm text-gray-400">Bu işlem yapay zeka modelleri (LLM, SD, TTS) kullandığı için 1-2 dakika sürebilir.</p>
+                                            <p className="text-sm dark:text-gray-400 text-gray-500">Bu işlem yapay zeka modelleri (LLM, SD, TTS) kullandığı için 1-2 dakika sürebilir.</p>
                                         </div>
 
                                         <div className="w-64 mx-auto bg-dark-800 rounded-full h-2 overflow-hidden border border-white/10">
@@ -998,145 +1033,174 @@ function App() {
                                 )}
                             </div>
                         ) : (
-                            // --- CHAT MODE UI (Panel Layout) ---
-                            <div className="flex-1 flex flex-col h-full relative z-10 p-0 md:p-2 overflow-hidden">
-                                <div className="w-full md:w-[500px] h-full flex flex-col dark:bg-dark-800/40 bg-white/60 backdrop-blur-2xl dark:border-white/10 border-gray-200/50 border md:rounded-3xl overflow-hidden relative shadow-2xl transition-all duration-300">
+                            // --- CHAT MODE UI (AI Chat Layout) ---
+                            <div className="flex-1 flex flex-col h-full relative z-10 overflow-hidden">
+                                <div className="flex-1 flex flex-col h-full">
+                                    {/* Section Header */}
+                                    <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-primary/80">
+                                        <Sparkles size={14} className="text-primary" />
+                                        CHAT ASSISTANT
+                                    </div>
+                                    <h1 className="text-3xl md:text-4xl font-bold mt-2 dark:text-white text-gray-900">AI Chat</h1>
+                                    <p className="text-sm md:text-base dark:text-gray-400 text-gray-500 mt-1">Ask anything and get intelligent responses instantly</p>
 
-                                    {/* Messages List */}
-                                    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 scrollbar-thin dark:scrollbar-thumb-white/10 scrollbar-thumb-gray-300">
-                                        {messages.map((msg, idx) => (
-                                            <div
-                                                key={idx}
-                                                className={`flex gap-4 message-appear ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
-                                            >
-                                                {/* Avatar */}
-                                                <div className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center ${msg.role === 'user'
-                                                    ? 'bg-gradient-to-br from-gray-700 to-gray-600'
-                                                    : 'bg-gradient-to-br from-primary to-indigo-600'
-                                                    }`}>
-                                                    {msg.role === 'user' ? <User size={18} /> : <Sparkles size={18} />}
+                                    {/* Main Chat Body */}
+                                    <div className={`flex-1 mt-10 ${hasConversation ? 'overflow-y-auto' : 'flex items-center justify-center'}`}>
+                                        {!hasConversation ? (
+                                            <div className="w-full max-w-3xl mx-auto flex flex-col items-center text-center gap-4">
+                                                <div className="w-16 h-16 rounded-full bg-primary/20 border border-primary/30 flex items-center justify-center shadow-[0_0_25px_rgba(112,0,255,0.25)]">
+                                                    <Sparkles size={28} className="text-primary" />
                                                 </div>
+                                                <h2 className="text-2xl font-semibold dark:text-white text-gray-900">How can I help you today?</h2>
+                                                <p className="text-sm dark:text-gray-400 text-gray-500">Choose a suggestion below or type your own message</p>
 
-                                                {/* Message Bubble */}
-                                                <div className={`flex flex-col max-w-[80%] space-y-2 ${msg.role === 'user' ? 'items-end' : 'items-start'
-                                                    }`}>
-                                                    <div className={`px-5 py-3.5 rounded-2xl relative group shadow-sm transition-colors ${msg.role === 'user'
-                                                        ? 'bg-gradient-to-br from-white to-gray-50 text-dark-900 border border-transparent font-medium rounded-tr-sm shadow-md'
-                                                        : 'dark:bg-white/10 bg-white dark:border-white/5 border-gray-200 border dark:text-gray-100 text-gray-800 rounded-tl-sm backdrop-blur-md shadow-sm'
-                                                        }`}>
-                                                        <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
-
-                                                        {/* Play TTS Button */}
-                                                        {msg.role === 'ai' && (
+                                                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                                                    {quickSuggestions.map((item) => {
+                                                        const Icon = item.icon;
+                                                        return (
                                                             <button
-                                                                onClick={() => handleTTS(msg.content, idx)}
-                                                                disabled={ttsLoading}
-                                                                className={`absolute -right-8 top-1/2 -translate-y-1/2 p-2 text-gray-500 hover:text-white transition-all scale-90 hover:scale-100 ${playingMsgIndex === idx ? 'opacity-100 text-pink-500' : 'opacity-0 group-hover:opacity-100'} ${ttsLoading ? 'cursor-wait opacity-50' : ''}`}
-                                                                title={playingMsgIndex === idx ? "Durdur" : "Seslendir"}
+                                                                key={item.label}
+                                                                onClick={() => handleSuggestion(item.prompt)}
+                                                                disabled={isProcessing}
+                                                                className="group w-full text-left dark:bg-white/5 dark:hover:bg-white/10 dark:border-white/10 bg-white hover:bg-gray-50 border border-gray-200 rounded-2xl p-4 transition-all duration-300 hover:shadow-[0_0_25px_rgba(112,0,255,0.15)]"
                                                             >
-                                                                {playingMsgIndex === idx ? <StopCircle size={20} className="animate-pulse" /> : <Volume2 size={16} />}
+                                                                <div className="flex items-center gap-3">
+                                                                    <div className="w-9 h-9 rounded-xl dark:bg-white/5 dark:border-white/10 bg-white border-gray-200 flex items-center justify-center text-primary group-hover:scale-105 transition-transform">
+                                                                        <Icon size={18} />
+                                                                    </div>
+                                                                    <span className="text-sm font-medium dark:text-white text-gray-900">{item.label}</span>
+                                                                </div>
                                                             </button>
-                                                        )}
-                                                    </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="w-full max-w-3xl mx-auto px-2 md:px-6 space-y-6 pb-8">
+                                                {messages.map((msg, idx) => (
+                                                    <div
+                                                        key={idx}
+                                                        className={`flex gap-4 message-appear ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+                                                    >
+                                                        <div className={`w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center ${msg.role === 'user'
+                                                            ? 'bg-gradient-to-br from-primary/70 to-accent/70'
+                                                            : 'dark:bg-white/10 dark:border-white/10 dark:text-gray-200 bg-white border-gray-200 text-gray-700'
+                                                            }`}>
+                                                            {msg.role === 'user' ? <User size={16} /> : <Sparkles size={16} />}
+                                                        </div>
 
-                                                    {/* Included Image */}
-                                                    {msg.image && (
-                                                        <div className="rounded-xl overflow-hidden border border-white/10 shadow-lg max-w-sm transition-transform hover:scale-[1.02] cursor-pointer relative">
-                                                            <img src={msg.image} alt="Generated" className="w-full h-auto" />
-                                                            {msg.duration && (
-                                                                <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] px-2 py-1 rounded-full backdrop-blur-md font-mono border border-white/10">
-                                                                    {msg.duration}s
+                                                        <div className={`flex flex-col max-w-[80%] space-y-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                                                            <div className={`px-4 py-3 rounded-2xl relative group shadow-sm ${msg.role === 'user'
+                                                                ? 'bg-gradient-to-br from-primary/80 to-accent/80 text-white rounded-tr-sm'
+                                                                : 'dark:bg-white/5 dark:border-white/10 dark:text-gray-100 bg-white border-gray-200 text-gray-800 rounded-tl-sm'
+                                                                }`}>
+                                                                <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+
+                                                                {msg.role === 'ai' && (
+                                                                    <button
+                                                                        onClick={() => handleTTS(msg.content, idx)}
+                                                                        disabled={ttsLoading}
+                                                                        className={`absolute -right-8 top-1/2 -translate-y-1/2 p-2 text-gray-500 hover:text-white transition-all scale-90 hover:scale-100 ${playingMsgIndex === idx ? 'opacity-100 text-pink-500' : 'opacity-0 group-hover:opacity-100'} ${ttsLoading ? 'cursor-wait opacity-50' : ''}`}
+                                                                        title={playingMsgIndex === idx ? "Durdur" : "Seslendir"}
+                                                                    >
+                                                                        {playingMsgIndex === idx ? <StopCircle size={18} className="animate-pulse" /> : <Volume2 size={14} />}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+
+                                                            {msg.image && (
+                                                                <div className="rounded-xl overflow-hidden border border-white/10 shadow-lg max-w-sm transition-transform hover:scale-[1.02] cursor-pointer relative">
+                                                                    <img src={msg.image} alt="Generated" className="w-full h-auto" />
+                                                                    {msg.duration && (
+                                                                        <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[10px] px-2 py-1 rounded-full backdrop-blur-md font-mono border border-white/10">
+                                                                            {msg.duration}s
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             )}
                                                         </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        ))}
+                                                    </div>
+                                                ))}
 
-                                        {/* Loading State */}
-                                        {isProcessing && (
-                                            <div className="flex gap-4 message-appear">
-                                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-indigo-600 flex items-center justify-center">
-                                                    <Sparkles size={18} />
-                                                </div>
-                                                <div className="bg-white/5 border border-white/5 px-5 py-3.5 rounded-2xl rounded-tl-sm flex items-center gap-2">
-                                                    <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                                                    <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                                                    <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                                                </div>
+                                                {isProcessing && (
+                                                    <div className="flex gap-4 message-appear">
+                                                        <div className="w-9 h-9 rounded-full dark:bg-white/10 dark:border-white/10 dark:text-gray-200 bg-white border-gray-200 text-gray-700 flex items-center justify-center">
+                                                            <Sparkles size={16} />
+                                                        </div>
+                                                        <div className="dark:bg-white/5 dark:border-white/10 bg-white border-gray-200 px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-2">
+                                                            <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                                                            <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                                            <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                <div ref={scrollRef} />
                                             </div>
                                         )}
-                                        <div ref={scrollRef} />
                                     </div>
 
-                                    {/* Input Area (Pinned to Panel) */}
-                                    <div className="p-4 dark:bg-dark-900/50 bg-white/40 dark:border-t border-white/5 border-gray-200/50 relative z-20">
+                                    {/* Input Area */}
+                                    <div className="pt-6 pb-2">
+                                        <div className="relative w-full max-w-3xl mx-auto">
+                                            {isRecording && audioStream && (
+                                                <div className="absolute -top-32 left-0 w-full px-6 z-10 pointer-events-none">
+                                                    <AudioVisualizer stream={audioStream} />
+                                                </div>
+                                            )}
 
-                                        {/* Audio Visualizer Overlay */}
-                                        {isRecording && audioStream && (
-                                            <div className="absolute -top-32 left-0 w-full px-6 z-10 pointer-events-none">
-                                                <AudioVisualizer stream={audioStream} />
-                                            </div>
-                                        )}
+                                            <div className="flex items-center gap-3 dark:bg-white/5 dark:border-white/10 bg-white border-gray-200 rounded-2xl px-4 py-3 backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,0.25)]">
+                                                <button
+                                                    onMouseDown={startRecording}
+                                                    onMouseUp={stopRecording}
+                                                    onMouseLeave={stopRecording}
+                                                    onTouchStart={startRecording}
+                                                    onTouchEnd={stopRecording}
+                                                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-300 relative overflow-hidden ${isRecording
+                                                        ? 'mic-pulse'
+                                                        : 'bg-white/5 text-gray-400 hover:text-primary hover:bg-white/10'
+                                                        }`}
+                                                    title="Hold to talk"
+                                                >
+                                                    <Mic size={18} className={`${isRecording ? 'animate-bounce' : ''}`} />
+                                                </button>
 
-                                        <div className="relative flex items-center gap-3 dark:bg-dark-800/80 bg-white dark:border-white/10 border-gray-200 border rounded-2xl p-2 shadow-lg dark:shadow-inner dark:ring-1 dark:ring-white/5">
+                                                <button
+                                                    onClick={handleDrawOpen}
+                                                    className="w-10 h-10 rounded-xl bg-white/5 text-gray-400 hover:text-accent hover:bg-white/10 transition-all flex items-center justify-center"
+                                                    title="Draw image"
+                                                >
+                                                    <Palette size={18} />
+                                                </button>
 
-                                            <button
-                                                onMouseDown={startRecording}
-                                                onMouseUp={stopRecording}
-                                                onMouseLeave={stopRecording}
-                                                onTouchStart={startRecording}
-                                                onTouchEnd={stopRecording}
-                                                className={`p-3 rounded-xl transition-all duration-300 relative overflow-hidden group ${isRecording
-                                                    ? 'mic-pulse'
-                                                    : 'dark:bg-white/5 bg-gray-100 dark:text-gray-400 text-gray-500 hover:text-primary dark:hover:bg-white/10 hover:bg-primary/10 dark:border-white/5 border-transparent'
-                                                    } active:scale-95`}
-                                                title="Bas Konuş"
-                                            >
-                                                <div className="absolute inset-0 bg-gradient-to-br from-secondary/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                                <Mic size={22} className={`relative z-10 ${isRecording ? 'animate-bounce' : ''}`} />
-                                            </button>
+                                                <input
+                                                    type="text"
+                                                    value={input}
+                                                    onChange={(e) => setInput(e.target.value)}
+                                                    onKeyDown={handleKeyDown}
+                                                    placeholder="Type your message..."
+                                                    className="flex-1 bg-transparent dark:text-white text-gray-800 dark:placeholder-gray-500 placeholder-gray-400 focus:outline-none h-full py-2 text-base px-1"
+                                                    disabled={isRecording}
+                                                />
 
-                                            <button
-                                                onClick={handleDrawOpen}
-                                                className="p-3 rounded-xl dark:bg-white/5 bg-gray-100 dark:text-gray-400 text-gray-500 hover:text-accent hover:bg-accent/10 dark:border-white/5 border-transparent transition-all hover:scale-110 hover:shadow-[0_0_15px_rgba(0,212,255,0.4)]"
-                                                title="Resim Çiz"
-                                            >
-                                                <Palette size={22} />
-                                            </button>
-
-                                            <input
-                                                type="text"
-                                                value={input}
-                                                onChange={(e) => setInput(e.target.value)}
-                                                onKeyDown={handleKeyDown}
-                                                placeholder="Bir şeyler yazın veya konuşun..."
-                                                className="flex-1 bg-transparent dark:text-white text-gray-800 dark:placeholder-gray-500 placeholder-gray-400 focus:outline-none h-full py-2 text-lg px-2"
-                                                disabled={isRecording}
-                                            />
-
-                                            <div className="pr-1">
                                                 <button
                                                     onClick={handleSend}
                                                     disabled={!input.trim() || isProcessing}
-                                                    className={`p-3 rounded-xl transition-all duration-300 ${input.trim()
-                                                        ? 'bg-gradient-to-r from-primary to-accent text-white shadow-[0_0_20px_rgba(112,0,255,0.4)] hover:shadow-[0_0_30px_rgba(0,212,255,0.6)] transform hover:scale-110 active:scale-95'
+                                                    className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${input.trim()
+                                                        ? 'bg-primary text-white hover:bg-primary/90'
                                                         : 'bg-white/5 text-gray-600 cursor-not-allowed'
                                                         }`}
                                                 >
-                                                    <Send size={20} />
+                                                    <Send size={18} />
                                                 </button>
                                             </div>
-                                        </div>
-                                        <div className="text-center mt-3 text-[10px] text-gray-600 font-mono tracking-widest opacity-50 uppercase">
-                                            Atlas OS
+                                            <div className="text-center mt-3 text-xs text-gray-500">
+                                                Press Enter to send or click the send button
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-
-                                {/* DRAWING MODAL (Kept full screen) */}
-                                {showDrawModal && (
+                            {/* DRAWING MODAL (Kept full screen) */}
+                            {showDrawModal && (
                                     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
                                         <div className="bg-dark-800 border border-white/10 rounded-3xl p-6 w-full max-w-md shadow-2xl scale-in">
                                             <div className="flex justify-between items-center mb-4">
