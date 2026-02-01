@@ -65,3 +65,5 @@ models/
 
 # Session Data & Security
 insta_session.json
+
+tools/

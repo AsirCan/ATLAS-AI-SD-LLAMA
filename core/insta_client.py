@@ -3,9 +3,53 @@ import time
 from instagrapi import Client
 from instagrapi.exceptions import TwoFactorRequired, ChallengeRequired, LoginRequired
 from core.llm import llm_answer
-from core.config import RED, GREEN, YELLOW, RESET, INSTA_USERNAME, INSTA_PASSWORD
+from core.config import RED, GREEN, YELLOW, RESET, INSTA_USERNAME
+
+try:
+    import keyring
+except Exception:
+    keyring = None
 
 SESSION_FILE = "insta_session.json"
+KEYRING_SERVICE = "atlas-instagram"
+KEYRING_ACTIVE_USER = "__active_username__"
+
+def set_instagram_credentials(username: str, password: str) -> bool:
+    """
+    Stores Instagram credentials in OS credential store (Windows Credential Manager via keyring).
+    Does not write password to .env.
+    """
+    if not username or not password:
+        raise ValueError("Username/password required")
+    if keyring is None:
+        raise RuntimeError("keyring is not available on this system")
+
+    keyring.set_password(KEYRING_SERVICE, KEYRING_ACTIVE_USER, username)
+    keyring.set_password(KEYRING_SERVICE, username, password)
+    return True
+
+def get_instagram_credentials():
+    """
+    Returns (username, password) using this priority:
+    - username: .env INSTA_USERNAME, else keyring active username
+    - password: keyring password for username
+    """
+    username = INSTA_USERNAME
+    password = None
+
+    if (not username) and keyring is not None:
+        try:
+            username = keyring.get_password(KEYRING_SERVICE, KEYRING_ACTIVE_USER)
+        except Exception:
+            username = None
+
+    if username and keyring is not None:
+        try:
+            password = keyring.get_password(KEYRING_SERVICE, username)
+        except Exception:
+            password = None
+
+    return username, password
 
 def generate_caption_with_llama(prompt_text):
     print(f"{YELLOW}📝 Llama Instagram için açıklama yazıyor...{RESET}")
@@ -66,13 +110,19 @@ def generate_caption_with_llama(prompt_text):
 
 def login_to_instagram():
     cl = Client()
+
+    username, password = get_instagram_credentials()
+    if not username or not password:
+        print(f"{RED}❌ Instagram kimlik bilgileri bulunamadı.{RESET}")
+        print(f"{YELLOW}UI üzerinden 'Instagram Giriş (Kaydet)' yapın veya .env içine INSTA_USERNAME yazın.{RESET}")
+        return None
     
     # 1. Kayıtlı oturum varsa yükle ve TEST ET
     if os.path.exists(SESSION_FILE):
         print(f"{YELLOW}🍪 Kayıtlı oturum dosyası bulundu, deneniyor...{RESET}")
         try:
             cl.load_settings(SESSION_FILE)
-            cl.login(INSTA_USERNAME, INSTA_PASSWORD)
+            cl.login(username, password)
             print(f"{GREEN}✅ Eski oturum ile giriş başarılı.{RESET}")
             return cl
         except (LoginRequired, Exception) as e:
@@ -91,7 +141,7 @@ def login_to_instagram():
 
     try:
         cl.challenge_code_handler = code_handler
-        cl.login(INSTA_USERNAME, INSTA_PASSWORD)
+        cl.login(username, password)
     
     except TwoFactorRequired:
         print(f"{RED}⚠️ 2FA Kodu Gerekli!{RESET}")
@@ -111,6 +161,15 @@ def login_to_instagram():
     cl.dump_settings(SESSION_FILE)
     print(f"{GREEN}✅ Giriş başarılı ve yeni oturum kaydedildi.{RESET}")
     return cl
+
+def reset_instagram_session() -> bool:
+    """Deletes local session file to force re-login."""
+    try:
+        if os.path.exists(SESSION_FILE):
+            os.remove(SESSION_FILE)
+        return True
+    except Exception:
+        return False
 
 def prepare_insta_caption(prompt_text):
     """
@@ -161,22 +220,6 @@ def login_and_upload(image_path, caption):
         error_msg = f"Instagram yükleme hatası: {e}"
         print(f"{RED}{error_msg}{RESET}")
         return False, error_msg
-
-# Eskisiyle uyumluluk için (CLI modunda kullanılırsa diye optional tutuyoruz ama main.py'i düzelteceğiz)
-def upload_to_instagram_interactive(image_path, prompt_text):
-    """
-    Eski bloke eden input() tabanlı versiyon (Sadece CLI main.py için).
-    """
-    caption = prepare_insta_caption(prompt_text)
-    
-    # --- KULLANICI ONAYI (CLI) ---
-    onay = input(f"{YELLOW}❓ Bu metni ve resmi yüklüyorum? (y/n) veya (e/h): {RESET}").lower().strip()
-
-    if onay not in ['y', 'yes', 'e', 'evet']:
-        print(f"{RED}❌ İşlem senin isteğinle İPTAL edildi. Yükleme yapılmadı.{RESET}")
-        return False, "Kullanıcı iptal etti."
-    
-    return login_and_upload(image_path, caption)
 
 import traceback
 from PIL import Image

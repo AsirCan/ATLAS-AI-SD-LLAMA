@@ -1,96 +1,168 @@
-# 🌍 ATLAS AI - Local Voice & Visual Assistant
+# Atlas Assistant (Web + Otonom Ajan)
 
-**Atlas AI** is a fully local, agentic voice assistant capable of generating real-time visuals, news videos, and managing Instagram content using advanced AI models.
+Bu repo, web arayüzlü bir sesli asistan/üretim stüdyosu ve Instagram için **otonom (multi-agent) içerik üretim ajanı** içerir.
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
-![React](https://img.shields.io/badge/React-18-blue?style=for-the-badge&logo=react)
-![Stable Diffusion](https://img.shields.io/badge/Stable%20Diffusion-XL-orange?style=for-the-badge)
-![Llama 3](https://img.shields.io/badge/LLM-Llama%203-blueviolet?style=for-the-badge)
+## Özellikler
 
-## ✨ Features
+### Web arayüz (React/Vite)
+- **Chat**: `/api/chat` üzerinden Ollama ile sohbet.
+- **Görsel çizim**: `/api/image` üzerinden Stable Diffusion (Forge API) ile görsel üretimi.
+- **STT/TTS**: `/api/stt` ve `/api/tts` ile konuşma → yazı ve yazı → ses.
+- **Instagram Studio**:
+  - Günlük tek içerik üretimi (haber → prompt → görsel → caption).
+  - 10’lu carousel üretimi.
+  - “Otonom ajan”ı UI’den başlatma, adım adım ilerleme ekranı ve canlı log görüntüleme.
 
-- **🗣️ Voice Interaction:** Talk to Atlas naturally using Speech-to-Text and TTS (Fahrettin model).
-- **🎨 Image Generation:** Creates high-quality images using Stable Diffusion XL (via Forge WebUI) based on conversation context.
-- **📰 News Agent:** Fetches real-world news, writes scripts, generates visuals, and produces narrated video reports.
-- **📸 Instagram Integration:** Can automatically upload generated content to Instagram as posts or carousels.
-- **🧠 Local Intelligence:** Powered by Llama 3 (via Ollama) running entirely on your machine.
-- **💻 Modern Web UI:** sleek, responsive React frontend.
+### Otonom ajan (Multi-Agent Pipeline)
+- **Orchestrator tabanlı pipeline**: haber seçimi → risk filtresi → görsel üretimi → caption → zamanlama → (dry-run veya upload).
+- **UI’de anlaşılır durum**:
+  - `stage` + yüzde ilerleme + adım listesi + canlı loglar.
+  - Ajan çalışırken UI, GPU/VRAM’i yormamak için diğer işlemleri ve navigasyonu kilitler.
+- **İptal**:
+  - UI’den “İptal Et” ile **güvenli durdurma** (cooperative cancel).
+  - Not: Eğer o an Stable Diffusion çiziyorsa, iptal isteği **o adım bitince** uygulanır.
 
-## 🛠️ Prerequisites
+## Kurulum
 
-Before you begin, ensure you have the following installed:
+## Sıfırdan hızlı başlangıç (Windows)
 
-- **OS:** Windows 10/11 (Recommended)
-- **GPU:** NVIDIA GPU with 8GB+ VRAM (Recommended for SDXL)
-- **Software:**
-  - [Python 3.10+](https://www.python.org/downloads/) (Make sure to check **"Add to PATH"**)
-  - [Git](https://git-scm.com/)
-  - [Node.js](https://nodejs.org/) (For the web interface)
-  - [Ollama](https://ollama.com/) (For Llama 3)
+Bu bölüm “hiç bilmeyen” biri için en baştan kullanım adımlarını özetler.
 
-## 🚀 Installation & Setup
+1. Repoyu indir/klonla ve klasöre gir.
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/AsirCan/ATLAS-AI-SD-LLAMA.git
-cd ATLAS-AI-SD-LLAMA
+2. Python sanal ortamını oluştur ve aktif et:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
 ```
 
-### 2. Configure Credentials
-**Critical Step:** This project uses a secure `.env` file for credentials.
-1.  Copy the example file:
-    ```bash
-    copy .env.example .env
-    ```
-2.  Open `.env` with a text editor and fill in your details:
-    ```ini
-    INSTA_USERNAME=your_username
-    INSTA_PASSWORD=your_password
-    ```
+3. Kurulum sihirbazını çalıştır (Python paketleri + Forge + model + Ollama model pull):
 
-### 3. Automated Install
-Run the installer script to set up the virtual environment, download dependencies, and set up Stable Diffusion (Forge):
-```bash
+```powershell
 python install.py
 ```
-*(This may take a while as it downloads large AI models.)*
 
-### 4. Install Frontend Dependencies
-```bash
-cd web/frontend
-npm install
-cd ../..
-```
+4. `.env.example` → `.env` yap ve Instagram bilgilerini gir:
+   - `INSTA_USERNAME`
+   - Şifre UI’den “Instagram Giriş (Kaydet)” ile Windows Credential Manager’a kaydedilir.
 
-## ▶️ Usage
+5. Uygulamayı başlat:
 
-To start Atlas (Backend + Frontend + Browser):
-
-```bash
+```powershell
 python run.py
 ```
 
-- **Voice Command:** Say "Hey Atlas" to wake it up.
-- **Web Interface:** Opens automatically at `http://localhost:5173`.
+6. Tarayıcıda açılan arayüzde:
+   - **Chat**: yaz/konuş → cevap al.
+   - **Studio**: “Günlük Tek İçerik”, “10’lu Carousel” veya “Otonom Ajan”.
+   - **Video**: gündem videosu üret.
 
-## 📂 Project Structure
+Notlar:
+- Ajan çalışırken UI diğer işlemleri ve navigasyonu kilitler (GPU/VRAM için).
+- “İptal Et” butonu **güvenli durdurma** yapar; SD çizim anında ise adım bitince durur.
 
+### Gereksinimler
+- **Python**: 3.10+
+- **Node.js**: (frontend için)
+- **Ollama**: `https://ollama.com/`
+- **Stable Diffusion**: Forge veya WebUI API (varsayılan: `127.0.0.1:7860`)
+- (Video modunu kullanacaksan) **FFmpeg** sistemde kurulu olmalı.
+
+### TTS (Piper) notu (Windows)
+- TTS için `models/` altında şu iki dosya gerekir:
+  - `tr_TR-fahrettin-medium.onnx`
+  - `tr_TR-fahrettin-medium.onnx.json`
+- Windows’ta bazı `pip install piper-tts` kurulumlarında `espeakbridge` eksik olduğu için `/api/tts` hata verebilir.
+  - Çözüm: **standalone Piper** (piper.exe) kullan.
+  - `.env` içine `PIPER_BIN=C:\...\piper.exe` yaz **veya** `tools/piper/piper.exe` olarak projeye koy (otomatik bulunur).
+
+### Yükleme
+1. Bağımlılıkları kur:
+
+```powershell
+python install.py
 ```
-├── core/               # Python backend logic (AI agents, config)
-├── web/
-│   ├── backend/        # FastAPI server
-│   └── frontend/       # React application
-├── models/             # Local AI models (STT/TTS)
-├── install.py          # Setup script
-└── run.py              # Launcher script
+
+2. `.env.example` dosyasını `.env` yap ve gerekli alanları doldur:
+   - `INSTA_USERNAME`
+   - Şifre UI’den “Instagram Giriş (Kaydet)” ile Windows Credential Manager’a kaydedilir.
+
+## Çalıştırma
+
+### Web UI (önerilen)
+Backend + Frontend’i birlikte başlatır ve tarayıcıyı açar:
+
+```powershell
+python run.py
 ```
 
-## 🛡️ Privacy & Security
-- **Credentials:** Your Instagram password is strictly stored in your local `.env` file and is **never** uploaded to GitHub.
-- **Local Processing:** All voice and image processing happens locally on your machine.
+### CLI: Otonom ajan
+UI olmadan, doğrudan pipeline çalıştırır:
 
-## 🤝 Contributing
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+**Dry Run (Instagram’a yüklemez)**
 
-## 📄 License
-[MIT](https://choosealicense.com/licenses/mit/)
+```powershell
+python run.py --agent
+```
+
+**Live Mode (Instagram’a yükler)**
+
+```powershell
+python run.py --agent --live
+```
+
+## API (kısa özet)
+- **Chat**: `POST /api/chat`
+- **Image**: `POST /api/image`
+- **STT**: `POST /api/stt`
+- **TTS**: `POST /api/tts`
+- **Ajan başlat**: `POST /api/agent/run?live=false|true`
+- **Ajan durum**: `GET /api/agent/progress` (status/percent/stage/current_task/logs/…)
+- **Ajan iptal**: `POST /api/agent/cancel` (cooperative cancel)
+
+## Mimari (dosya düzeyi)
+- **Backend (FastAPI)**: `web/backend/main.py`
+- **Frontend (React/Vite)**: `web/frontend/`
+- **Agent Orchestrator**: `core/orchestrator.py`
+- **Agent’lar**: `core/agents/`
+  - `NewsAgent` → haberleri toplar ve skorlar
+  - `RiskAgent` → güvenlik filtresi
+  - `VisualDirectorAgent` → görsel prompt + SD çizim
+  - `CaptionAgent` → caption üretimi
+  - `SchedulerAgent` → paylaşım zamanı
+- **LLM katmanı (tek yol)**: `core/llm.py` (`LLMService` + legacy wrapper’lar)
+- **Stable Diffusion istemcisi**: `core/sd_client.py`
+
+## Otonom ajan algoritması (adım adım)
+
+### 0) UI/Backend koordinasyonu
+- UI, `POST /api/agent/run` ile background job başlatır.
+- UI, `GET /api/agent/progress` ile her saniye durum çeker:
+  - `status`: `idle | running | done | error | cancelled`
+  - `stage`: `services_check | init | news | risk | visual | caption | schedule | publish | done | error | cancelled`
+  - `percent`: 0–100
+  - `logs`: canlı log satırları
+- UI, ajan çalışırken diğer işlemleri ve sidebar navigasyonunu kilitler (VRAM/GPU yükünü azaltmak için).
+- UI’den `POST /api/agent/cancel` ile iptal isteği gönderilebilir (cooperative).
+
+### 1) Servis kontrolü (backend)
+1. Ollama portu kontrol edilir; çalışmıyorsa başlatılır.
+2. Stable Diffusion (Forge API) portu kontrol edilir; çalışmıyorsa başlatılır ve hazır olana kadar beklenir.
+3. Bu bekleme sırasında cancel flag set edilirse job güvenli şekilde durur.
+
+### 2) Orchestrator pipeline (core)
+Orchestrator aşağıdaki sırayla ilerler (her adım loglanır ve UI’ye yansır):
+1. **News Gathering**: RSS kaynaklarından haberleri alır ve skorlar.
+2. **Risk Analysis**: marka güvenliği/risk filtresi uygular.
+3. **Visual Generation**: seçilen haberden görsel prompt üretir ve SD ile görsel çizer.
+4. **Captioning**: caption üretir.
+5. **Scheduling**: paylaşım zamanı belirler.
+6. **Publishing**:
+   - Dry-run ise upload atlanır.
+   - Live ise Instagram upload yapılır.
+
+### 3) Tamamlama
+- Başarılı: `status=done`, `percent=100`
+- İptal: `status=cancelled` (cooperative)
+- Hata: `status=error` + `error` alanı

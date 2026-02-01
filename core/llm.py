@@ -1,6 +1,8 @@
 import requests
 import subprocess
 import time
+import json
+from typing import Optional, Dict, Any, List, Sequence, Literal
 
 from core.config import RED, YELLOW, RESET
 
@@ -21,6 +23,17 @@ SYSTEM_PROMPT = (
     "Maksimum 3-4 kısa cümle kullan."
 )
 
+def _clean_llm_text(text: str) -> str:
+    return text.replace("```json", "").replace("```", "").strip()
+
+_DEFAULT_LLM_SERVICE = None
+
+def get_llm_service():
+    global _DEFAULT_LLM_SERVICE
+    if _DEFAULT_LLM_SERVICE is None:
+        _DEFAULT_LLM_SERVICE = LLMService()
+    return _DEFAULT_LLM_SERVICE
+
 def llm_answer(msg: str, system_msg: str = None) -> str:
     # 3 kere deneme hakkı veriyoruz
     max_retries = 3
@@ -30,21 +43,8 @@ def llm_answer(msg: str, system_msg: str = None) -> str:
 
     for i in range(max_retries):
         try:
-            payload = {
-                "model": MODEL,
-                "messages": [
-                    {"role": "system", "content": final_system_prompt},
-                    {"role": "user", "content": msg}
-                ],
-                "stream": False
-            }
-
             # Timeout süresini artırdık çünkü modelin yüklenmesi uzun sürebilir
-            r = requests.post(OLLAMA_URL, json=payload, timeout=180)
-            r.raise_for_status()
-
-            data = r.json()
-            return data["message"]["content"]
+            return get_llm_service().ask(msg, system=final_system_prompt, timeout=180, retries=1)
 
         except Exception as e:
             print(RED + f"[OLLAMA HATASI - Deneme {i+1}/{max_retries}] {e}")
@@ -85,9 +85,7 @@ def unload_ollama():
     Böylece Stable Diffusion için yer açılır.
     """
     try:
-        # keep_alive: 0 parametresini gönderince model hemen unload olur
-        payload = {"model": MODEL, "keep_alive": 0}
-        requests.post(OLLAMA_URL, json=payload, timeout=3)
+        get_llm_service().unload(timeout=3)
         print(f"{RED}🧹 Ollama VRAM'den temizlendi.{RESET}")
     except Exception as e:
         print(f"⚠️ VRAM temizleme hatası: {e}")
@@ -110,18 +108,7 @@ def visual_prompt_generator(user_text: str) -> str:
     )
     
     try:
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_text}
-            ],
-            "stream": False
-        }
-        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
-        r.raise_for_status()
-        
-        prompt_en = r.json()["message"]["content"].strip()
+        prompt_en = get_llm_service().ask(user_text, system=system_msg, timeout=60, retries=1).strip()
         
         # Temizlik
         if ":" in prompt_en and len(prompt_en.split(":")[0]) < 20: # "Detailed prompt: ..." gibi şeyleri temizle
@@ -134,3 +121,118 @@ def visual_prompt_generator(user_text: str) -> str:
         # Hata olursa en azından orijinalini (veya basit çeviriyi) döndürmeye çalışalım 
         # ama LLM yoksa yapacak bir şey yok, orijinali yolla.
         return user_text
+
+# ==================================================
+# UNIFIED SERVICE LAYER (For Multi-Agent System)
+# ==================================================
+MessageRole = Literal["system", "user", "assistant"]
+
+class LLMService:
+    def __init__(self, model: str = None, host: str = "http://localhost:11434"):
+        # Use existing MODEL constant if none provided
+        self.model = model or MODEL
+        self.host = host
+        self.api_url = f"{host}/api/chat"
+
+    def chat(
+        self,
+        messages: Sequence[Dict[str, str]],
+        *,
+        format: Optional[Literal["json"]] = None,
+        timeout: int = 60,
+        retries: int = 3,
+    ) -> str:
+        payload: Dict[str, Any] = {"model": self.model, "messages": list(messages), "stream": False}
+        if format:
+            payload["format"] = format
+
+        last_exc: Optional[Exception] = None
+        for _ in range(retries):
+            try:
+                response = requests.post(self.api_url, json=payload, timeout=timeout)
+                response.raise_for_status()
+                result = response.json()
+                return result.get("message", {}).get("content", "")
+            except requests.RequestException as e:
+                last_exc = e
+                time.sleep(2)
+        raise Exception(f"Failed to chat with LLM after {retries} retries: {last_exc}")
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        system: Optional[str] = None,
+        timeout: int = 60,
+        retries: int = 3,
+        format: Optional[Literal["json"]] = None,
+    ) -> str:
+        messages: List[Dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        return self.chat(messages, format=format, timeout=timeout, retries=retries)
+
+    def ask_english(self, prompt: str, *, timeout: int = 60, retries: int = 3) -> str:
+        return self.ask(
+            prompt,
+            system="You are a creative AI visual director. You MUST write in ENGLISH only.",
+            timeout=timeout,
+            retries=retries,
+        )
+
+    def generate_json(
+        self,
+        prompt: str,
+        *,
+        schema: Dict[str, Any],
+        system: Optional[str] = None,
+        timeout: int = 60,
+        retries: int = 3,
+    ) -> Dict[str, Any]:
+        schema_hint = json.dumps(schema, ensure_ascii=False)
+        final_prompt = (
+            f"{prompt}\n\nIMPORTANT: Return ONLY a valid JSON object matching this schema: {schema_hint}"
+        )
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(retries):
+            try:
+                response_text = self.ask(
+                    final_prompt,
+                    system=system,
+                    timeout=timeout,
+                    retries=1,
+                    format="json",
+                )
+                return json.loads(_clean_llm_text(response_text))
+            except Exception as e:
+                last_exc = e
+                print(f"LLM JSON parse error (Attempt {attempt+1}/{retries}): {e}")
+                time.sleep(1)
+        raise Exception(f"Failed to generate valid JSON from LLM after {retries} retries: {last_exc}")
+
+    def unload(self, *, timeout: int = 3) -> bool:
+        endpoints = [f"{self.host}/api/generate", f"{self.host}/api/chat"]
+        for url in endpoints:
+            try:
+                if url.endswith("/api/generate"):
+                    payload = {"model": self.model, "keep_alive": 0, "prompt": " "}
+                else:
+                    payload = {
+                        "model": self.model,
+                        "keep_alive": 0,
+                        "messages": [{"role": "user", "content": " "}],
+                        "stream": False,
+                    }
+                requests.post(url, json=payload, timeout=timeout)
+                return True
+            except Exception:
+                continue
+        return False
+
+    # Backwards-compat for agent code already using generate_response(prompt, schema=...)
+    def generate_response(self, prompt: str, schema: Optional[Dict] = None, retries: int = 3) -> Dict[str, Any]:
+        if schema:
+            return self.generate_json(prompt, schema=schema, retries=retries)
+        return {"response": self.ask(prompt, retries=retries)}

@@ -1,10 +1,8 @@
 import time
-import requests
 import json
-from core.daily_visual_agent import dunya_gundemini_getir, ask_ollama_english, free_ollama_vram
+from core.daily_visual_agent import dunya_gundemini_getir
 from core.sd_client import resim_ciz
-from core.config import RED, GREEN, YELLOW, RESET
-from core.llm import MODEL
+from core.llm import get_llm_service, unload_ollama
 
 def generate_carousel_content(log_callback=print):
     """
@@ -42,7 +40,7 @@ def generate_carousel_content(log_callback=print):
         "OUTPUT ONLY the topic name (e.g. 'Future of Space Stations')."
     )
     
-    topic = ask_ollama_english(topic_selection_prompt)
+    topic = get_llm_service().ask_english(topic_selection_prompt, timeout=60, retries=1)
     log_callback(f"🎯 Seçilen Konu: {topic}")
     
     # 3. 10 Farklı Prompt Üret
@@ -88,7 +86,7 @@ def generate_carousel_content(log_callback=print):
         "Do NOT include explanations. Ensure valid JSON."
     )
     
-    json_response_str = ask_ollama_english(carousel_prompt)
+    json_response_str = get_llm_service().ask_english(carousel_prompt, timeout=90, retries=1)
     
     # JSON Temizliği
     parsed_slides = []
@@ -126,7 +124,7 @@ def generate_carousel_content(log_callback=print):
     # 4. SD Öncesi VRAM Temizliği 
 
     # 4. SD Öncesi VRAM Temizliği
-    free_ollama_vram(log_callback)
+    unload_ollama()
     time.sleep(2)
     
     # 5. Görselleri Çiz (Döngü)

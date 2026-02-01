@@ -141,6 +141,27 @@ export const api = {
         }
     },
 
+    // --- Instagram Auth (Keyring-backed) ---
+    saveInstagramCredentials: async (username, password) => {
+        try {
+            const response = await client.post('/instagram/credentials', { username, password });
+            return response.data;
+        } catch (error) {
+            console.error('Instagram Credentials Error:', error);
+            return { success: false, error: error.toString() };
+        }
+    },
+
+    resetInstagramSession: async () => {
+        try {
+            const response = await client.post('/instagram/session/reset');
+            return response.data;
+        } catch (error) {
+            console.error('Instagram Session Reset Error:', error);
+            return { success: false, error: error.toString() };
+        }
+    },
+
     checkProgress: async () => {
         try {
             const response = await client.get('/progress');
@@ -150,12 +171,34 @@ export const api = {
         }
     },
 
-    checkNewsVideoProgress: async () => {
+    // --- Autonomous Agent ---
+    runAutonomousAgent: async (live = false) => {
         try {
-            const response = await client.get('/news/video_progress');
+            const response = await client.post('/agent/run', null, { params: { live } });
             return response.data;
         } catch (error) {
+            console.error('Agent Run Error:', error);
+            throw error;
+        }
+    },
+
+    checkAgentProgress: async () => {
+        try {
+            const response = await client.get('/agent/progress');
+            return response.data;
+        } catch (error) {
+            console.error('Agent Progress Error:', error);
             return { status: "error", error: error.toString() };
+        }
+    },
+
+    cancelAgent: async () => {
+        try {
+            const response = await client.post('/agent/cancel');
+            return response.data;
+        } catch (error) {
+            console.error('Agent Cancel Error:', error);
+            return { success: false, error: error.toString() };
         }
     }
 };

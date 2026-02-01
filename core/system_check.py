@@ -24,6 +24,41 @@ def is_sd_running(host="127.0.0.1", port=7860) -> bool:
     except OSError:
         return False
 
+def is_ollama_running(host="127.0.0.1", port=11434) -> bool:
+    """Ollama API portu açık mı?"""
+    try:
+        with socket.create_connection((host, port), timeout=1) as s:
+            return True
+    except OSError:
+        return False
+
+def start_ollama():
+    """Ollama'yı başlatır."""
+    print("🦙 Ollama başlatılıyor...")
+    subprocess.Popen(
+        ["ollama", "serve"],
+        creationflags=subprocess.CREATE_NEW_CONSOLE
+    )
+
+def ensure_ollama_running(log_callback=print, cancel_checker=None):
+    if is_ollama_running():
+        log_callback("🦙 Ollama zaten çalışıyor.")
+        return True
+    
+    start_ollama()
+    log_callback("⏳ Ollama açılıyor...")
+    while not is_ollama_running():
+        # Optional cooperative cancel (used by UI cancel)
+        try:
+            if callable(cancel_checker) and cancel_checker():
+                log_callback("🛑 İptal istendi (Ollama bekleme durduruldu).")
+                return False
+        except Exception:
+            pass
+        time.sleep(2)
+    log_callback(f"{GREEN}✅ Ollama hazır!{RESET}")
+    return True
+
 
 def start_stable_diffusion():
     """Forge'u minimized olarak API modunda başlatır."""
@@ -41,7 +76,7 @@ def start_stable_diffusion():
         stderr=subprocess.DEVNULL
     )
 
-def ensure_sd_running(wait_seconds=20, log_callback=print):
+def ensure_sd_running(wait_seconds=20, log_callback=print, cancel_checker=None):
     """
     SD çalışmıyorsa açar. Açtıktan sonra port gelene kadar bekler.
     """
@@ -59,6 +94,14 @@ def ensure_sd_running(wait_seconds=20, log_callback=print):
     last_print_time = start_time
     
     while True:
+        # Optional cooperative cancel (used by UI cancel)
+        try:
+            if callable(cancel_checker) and cancel_checker():
+                log_callback("🛑 İptal istendi (SD bekleme durduruldu).")
+                return False
+        except Exception:
+            pass
+
         if is_sd_running():
             log_callback(f"{GREEN}✅ Stable Diffusion başarıyla bağlandı ve hazır!{RESET}")
             return True

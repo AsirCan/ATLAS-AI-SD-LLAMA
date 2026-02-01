@@ -1,51 +1,14 @@
-import requests
 import time
 import feedparser
 import os
 import difflib
 import random
 
-# core.llm'den sadece ayarları alıyoruz
-from core.llm import MODEL, OLLAMA_URL 
+from core.llm import get_llm_service, unload_ollama
 from core.sd_client import resim_ciz
+from core.news_fetcher import RSS_SOURCES
 
-# ==========================================
-# 🌍 GLOBAL AYARLAR
-# ==========================================
-RSS_SOURCES = [
-    "http://feeds.bbci.co.uk/news/world/rss.xml",           # BBC World
-    "https://www.sciencedaily.com/rss/top/science.xml",     # Science Daily
-    "https://www.wired.com/feed/category/science/latest/rss", # Wired Science
-    "https://futurism.com/feed"                             # Futurism
-]
 HISTORY_FILE = "used_news_log.txt" 
-
-def ask_ollama_english(msg):
-    """İngilizce konuşan özel LLM fonksiyonu."""
-    try:
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a creative AI visual director. You MUST write in ENGLISH only."},
-                {"role": "user", "content": msg}
-            ],
-            "stream": False
-        }
-        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
-        r.raise_for_status()
-        return r.json()["message"]["content"].strip()
-    except Exception as e:
-        print(f"LLM Error: {e}")
-        return "A conceptual image showing diverse global events merging together."
-
-def free_ollama_vram(log_callback=print):
-    """LLM'i VRAM'den temizle."""
-    try:
-        payload = {"model": MODEL, "keep_alive": 0}
-        requests.post(OLLAMA_URL, json=payload, timeout=3)
-        log_callback(f"🧹 VRAM Temizliği: {MODEL} bellekten atıldı.")
-    except Exception as e:
-        log_callback(f"⚠️ VRAM temizleme hatası: {e}")
 
 # 👇 HAFIZA SİSTEMİ 👇
 def get_used_news():
@@ -101,7 +64,11 @@ def en_iyi_uc_haberi_sec(haber_listesi_string):
         "OUTPUT FORMAT:\n"
         "Reply ONLY with the 3 selected headlines, one per line, starting with a hyphen (-)."
     )
-    return ask_ollama_english(prompt)
+    try:
+        return get_llm_service().ask_english(prompt, timeout=60, retries=1)
+    except Exception as e:
+        print(f"LLM Error: {e}")
+        return "- A conceptual global tech breakthrough\n- A mysterious space discovery\n- A futuristic city innovation"
 
 # 👇 2. AŞAMA: GÖRSEL PROMPT HAZIRLAMA 👇
 def sahneyi_birlestir(secilen_3_haber):
@@ -121,7 +88,11 @@ def sahneyi_birlestir(secilen_3_haber):
         "6. Start with: 'A comprehensive cinematic shot of...'\n"
         "7. Output ONLY the visual description prompt."
     )
-    return ask_ollama_english(prompt)
+    try:
+        return get_llm_service().ask_english(prompt, timeout=60, retries=1)
+    except Exception as e:
+        print(f"LLM Error: {e}")
+        return "A conceptual image showing diverse global events merging together."
 
 # 👇 ANA FONKSİYON 👇
 def gunluk_instagram_gorseli_uret(log_callback=print):
@@ -193,7 +164,7 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
         log_callback(f"🇬🇧 Prompt: {birlesik_sahne_promptu[:100]}...") 
 
     # 4. VRAM Temizliği
-    free_ollama_vram(log_callback)
+    unload_ollama()
     time.sleep(1.5) 
 
     # 5. Çizim

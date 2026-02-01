@@ -78,6 +78,30 @@ def run_app():
         print("Güle güle! 👋")
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Atlas Assistant Launcher")
+    parser.add_argument("--agent", action="store_true", help="Run in Autonomous Agent Mode (No Web UI)")
+    parser.add_argument("--live", action="store_true", help="Enable Live Uploads for Agent Mode")
+    args = parser.parse_args()
+
     # Windows ANSI renkleri icin
     os.system('color')
-    run_app()
+
+    if args.agent:
+        print(f"{GREEN}🤖 Starting Atlas Autonomous Agent...{RESET}")
+        try:
+            from core.system_check import ensure_sd_running, ensure_ollama_running
+            
+            # Ensure Services are Running
+            ensure_ollama_running()
+            ensure_sd_running()
+            
+            from core.orchestrator import Orchestrator
+            # Dry run by default unless --live is passed
+            dry_run = not args.live
+            orchestrator = Orchestrator(dry_run=dry_run)
+            orchestrator.run_pipeline()
+        except ImportError as e:
+            print(f"{RED}❌ Agent modules not found: {e}{RESET}")
+    else:
+        run_app()

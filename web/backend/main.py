@@ -34,17 +34,74 @@ try:
     from core.llm import ollama_warmup
     # We will implement custom TTS logic here to avoid playing on server
     
-    # Import model config from core/tts to match user's settings
-    from core.tts import PIPER_MODEL, PIPER_CONFIG
+    # Import model config (no local playback, config only)
+    from core.tts_config import PIPER_MODEL, PIPER_CONFIG, PIPER_BIN
 except ImportError as e:
     print(f"Warning: Could not import core modules: {e}")
     # Define fallback if import fails (so execution doesn't crash)
     PIPER_MODEL = "models/tr_TR-fahrettin-medium.onnx"
     PIPER_CONFIG = "models/tr_TR-fahrettin-medium.onnx.json"
-except ImportError as e:
-    print(f"Warning: Could not import core modules: {e}")
-    # We continue, but some endpoints might fail
-    # Define dummy placeholders if needed or let individual endpoints fail gracefully
+    PIPER_BIN = "piper"
+
+# SAFE PIPER EXECUTION LOGIC
+# Windows often fails when tools run from paths with non-ASCII chars (like 'Ses_Asistanı').
+# We copy Piper AND Models to a temp dir to ensure everything runs from a clean path.
+SAFE_PIPER_BIN = None
+SAFE_PIPER_DIR = None
+
+def setup_safe_piper():
+    global SAFE_PIPER_BIN, SAFE_PIPER_DIR
+    try:
+        # 1. Find original Piper directory
+        if os.path.exists("tools/piper/piper.exe"):
+            original_piper_dir = os.path.abspath("tools/piper")
+        elif os.path.exists(PIPER_BIN) and os.path.isabs(PIPER_BIN):
+            original_piper_dir = os.path.dirname(PIPER_BIN)
+        else:
+            print(f"{YELLOW}⚠️ Piper not found locally, skipping safe setup.{RESET}")
+            SAFE_PIPER_BIN = PIPER_BIN # Fallback
+            return
+
+        # 2. Define safe temp path
+        # Use user's temp dir which is usually safe (e.g. C:\Users\User\AppData\Local\Temp)
+        safe_dir = os.path.join(os.environ["TEMP"], "atlas_safe_piper")
+        SAFE_PIPER_DIR = safe_dir
+        
+        # 3. Clean and Copy Piper Binaries
+        if os.path.exists(safe_dir):
+            try:
+                shutil.rmtree(safe_dir)
+            except Exception as e:
+                print(f"{YELLOW}⚠️ Could not clean safe piper dir: {e}{RESET}")
+        
+        print(f"{YELLOW}🛠️ Setting up safe Piper environment in {safe_dir}...{RESET}")
+        shutil.copytree(original_piper_dir, safe_dir)
+        
+        # 4. Copy Models to Safe Dir
+        # We need to copy the model files to the safe directory so their paths are also clean.
+        safe_models_dir = os.path.join(safe_dir, "models")
+        os.makedirs(safe_models_dir, exist_ok=True)
+        
+        # PIPER_MODEL is relative "models/..."
+        # We resolve it relative to current working directory (project root)
+        local_model_path = os.path.abspath(PIPER_MODEL)
+        local_config_path = os.path.abspath(PIPER_CONFIG)
+        
+        if os.path.exists(local_model_path):
+             shutil.copy2(local_model_path, safe_models_dir)
+             shutil.copy2(local_config_path, safe_models_dir)
+             print(f"{GREEN}✅ Models copied to safe dir.{RESET}")
+        else:
+             print(f"{RED}⚠️ Models not found at {local_model_path}{RESET}")
+
+        SAFE_PIPER_BIN = os.path.join(safe_dir, "piper.exe")
+        print(f"{GREEN}✅ Safe Piper ready: {SAFE_PIPER_BIN}{RESET}")
+        
+    except Exception as e:
+        print(f"{RED}❌ Safe Piper setup failed: {e}{RESET}")
+        SAFE_PIPER_BIN = PIPER_BIN # Fallback
+        
+
 
 
 app = FastAPI(title="Ses Asistanı API", version="1.0.0")
@@ -89,6 +146,10 @@ class InstaUploadRequest(BaseModel):
 class InstaCarouselUploadRequest(BaseModel):
     image_paths: list[str]
     caption: str
+
+class InstaCredentialsRequest(BaseModel):
+    username: str
+    password: str
     
 @app.get("/")
 def read_root():
@@ -265,6 +326,180 @@ async def news_video_generate_endpoint(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_video_generation_task)
     return {"success": True, "message": "Video generation started in background"}
 
+# --- AGENT LOGIC ---
+
+AGENT_PROGRESS = {
+    "status": "idle",
+    "percent": 0,
+    "stage": "idle",
+    "current_task": "",
+    "result": None,
+    "error": None,
+    "cancel_requested": False
+}
+
+def run_agent_task(live_mode: bool = False):
+    global AGENT_PROGRESS
+    AGENT_PROGRESS = {
+        "status": "running",
+        "percent": 0,
+        "stage": "starting",
+        "current_task": "Agent Başlatılıyor...",
+        "result": None,
+        "error": None,
+        "cancel_requested": False
+    }
+    
+    try:
+        from core.orchestrator import Orchestrator
+        from core.system_check import ensure_sd_running, ensure_ollama_running
+
+        def set_stage(stage: str, percent: int, task: str):
+            AGENT_PROGRESS["stage"] = stage
+            AGENT_PROGRESS["percent"] = percent
+            AGENT_PROGRESS["current_task"] = task
+
+        def is_cancelled() -> bool:
+            return bool(AGENT_PROGRESS.get("cancel_requested"))
+
+        def cancel_guard(where: str) -> bool:
+            if is_cancelled():
+                AGENT_PROGRESS["status"] = "cancelled"
+                AGENT_PROGRESS["stage"] = "cancelled"
+                AGENT_PROGRESS["current_task"] = f"İptal edildi ({where})."
+                return True
+            return False
+        
+        # 1. Services Check
+        set_stage("services_check", 5, "Servisler kontrol ediliyor (Ollama/SD)...")
+        if not ensure_ollama_running(cancel_checker=is_cancelled):
+            cancel_guard("servis_kontrol")
+            return
+        if cancel_guard("servis_kontrol"):
+            return
+        if not ensure_sd_running(cancel_checker=is_cancelled):
+            cancel_guard("servis_kontrol")
+            return
+        if cancel_guard("servis_kontrol"):
+            return
+        
+        # 2. Initialize
+        set_stage("init", 10, "Ajanlar hazırlanıyor...")
+        # We can pass a callback lambda to update progress if we modify orchestrator, 
+        # but for now we will just run it and assume it takes time.
+        # Ideally Orchestrator should yield progress updates.
+        
+        dry_run = not live_mode
+        orchestrator = Orchestrator(dry_run=dry_run)
+        orchestrator.set_cancel_checker(is_cancelled)
+        
+        # Capture Logs
+        import datetime
+        def log_capture(msg):
+            # Update global state logs
+            if "logs" not in AGENT_PROGRESS:
+                AGENT_PROGRESS["logs"] = []
+            
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+            AGENT_PROGRESS["logs"].append(f"[{timestamp}] {msg}")
+            
+            # Always show last line as current task (UI friendly)
+            AGENT_PROGRESS["current_task"] = msg
+
+            # Map orchestrator step logs to stage/percent for a clear progress bar
+            if "[Orchestrator]" in msg:
+                if "Step 1/6" in msg:
+                    AGENT_PROGRESS["stage"] = "news"
+                    AGENT_PROGRESS["percent"] = 20
+                elif "Step 2/6" in msg:
+                    AGENT_PROGRESS["stage"] = "risk"
+                    AGENT_PROGRESS["percent"] = 35
+                elif "Step 3/6" in msg:
+                    AGENT_PROGRESS["stage"] = "visual"
+                    AGENT_PROGRESS["percent"] = 55
+                elif "Step 4/6" in msg:
+                    AGENT_PROGRESS["stage"] = "caption"
+                    AGENT_PROGRESS["percent"] = 70
+                elif "Step 5/6" in msg:
+                    AGENT_PROGRESS["stage"] = "schedule"
+                    AGENT_PROGRESS["percent"] = 85
+                elif "Step 6/6" in msg:
+                    AGENT_PROGRESS["stage"] = "publish"
+                    AGENT_PROGRESS["percent"] = 95
+            
+        orchestrator.set_logger(log_capture)
+        
+        set_stage("running", 15, "Pipeline çalışıyor...")
+        if cancel_guard("pipeline_baslangic"):
+            return
+        
+        # Synchrounous run
+        final_state = orchestrator.run_pipeline()
+        
+        # If cancel was requested at any time, surface it as a cancelled status
+        if is_cancelled() or (final_state.upload_status and final_state.upload_status.get("message") == "Cancelled"):
+             AGENT_PROGRESS["status"] = "cancelled"
+             AGENT_PROGRESS["stage"] = "cancelled"
+             AGENT_PROGRESS["current_task"] = "İptal edildi."
+             return
+
+        if final_state.upload_status and final_state.upload_status.get("success"):
+             AGENT_PROGRESS["status"] = "done"
+             AGENT_PROGRESS["stage"] = "done"
+             AGENT_PROGRESS["percent"] = 100
+             AGENT_PROGRESS["current_task"] = "İşlem başarıyla tamamlandı."
+             AGENT_PROGRESS["result"] = final_state.upload_status
+        elif dry_run:
+             AGENT_PROGRESS["status"] = "done"
+             AGENT_PROGRESS["stage"] = "done"
+             AGENT_PROGRESS["percent"] = 100
+             AGENT_PROGRESS["current_task"] = "Test Tamamlandı (Dry Run)"
+             # Return generated images if available
+             if final_state.generated_images:
+                 AGENT_PROGRESS["result"] = {"images": final_state.generated_images}
+        else:
+             AGENT_PROGRESS["status"] = "error"
+             AGENT_PROGRESS["stage"] = "error"
+             # If upload status exists, bubble the real reason to UI
+             if final_state.upload_status and final_state.upload_status.get("message"):
+                 AGENT_PROGRESS["error"] = final_state.upload_status.get("message")
+                 AGENT_PROGRESS["current_task"] = f"Hata: {final_state.upload_status.get('message')}"
+             else:
+                 AGENT_PROGRESS["error"] = "Pipeline bir noktada durdu veya upload başarısız."
+                 AGENT_PROGRESS["current_task"] = "İşlem tamamlanamadı."
+
+    except Exception as e:
+        print(f"Agent Error: {e}")
+        AGENT_PROGRESS["status"] = "error"
+        AGENT_PROGRESS["stage"] = "error"
+        AGENT_PROGRESS["error"] = str(e)
+        AGENT_PROGRESS["current_task"] = "Kritik Hata"
+
+@app.post("/api/agent/cancel")
+async def cancel_agent_endpoint():
+    """
+    Cooperative cancel:
+    - Sets a flag checked by the background job between steps.
+    - If currently in a blocking SD generation call, it will cancel after that step completes.
+    """
+    if AGENT_PROGRESS.get("status") != "running":
+        return {"success": False, "error": "Ajan çalışmıyor."}
+    AGENT_PROGRESS["cancel_requested"] = True
+    AGENT_PROGRESS["current_task"] = "İptal isteği alındı. Güvenli durdurma bekleniyor..."
+    return {"success": True, "message": "Cancel requested"}
+
+@app.post("/api/agent/run")
+async def run_agent_endpoint(background_tasks: BackgroundTasks, live: bool = False):
+    if AGENT_PROGRESS["status"] == "running":
+        return {"success": False, "error": "Ajan zaten çalışıyor!"}
+    
+    background_tasks.add_task(run_agent_task, live_mode=live)
+    return {"success": True, "message": "Autonomous Agent started"}
+
+@app.get("/api/agent/progress")
+def agent_progress_endpoint():
+    return AGENT_PROGRESS
+
 # --- CAROUSEL LOGIC ---
 
 def run_carousel_generation_task():
@@ -351,6 +586,29 @@ async def carousel_upload_endpoint(req: InstaCarouselUploadRequest):
         print(f"Carousel Upload Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/instagram/credentials")
+async def instagram_credentials_endpoint(req: InstaCredentialsRequest):
+    """
+    Stores Instagram credentials in OS credential manager (keyring).
+    This avoids keeping passwords in .env.
+    """
+    try:
+        from core.insta_client import set_instagram_credentials
+        set_instagram_credentials(req.username, req.password)
+        return {"success": True, "message": "Credentials saved"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/instagram/session/reset")
+async def instagram_session_reset_endpoint():
+    """Deletes insta_session.json to force a fresh login next upload."""
+    try:
+        from core.insta_client import reset_instagram_session
+        ok = reset_instagram_session()
+        return {"success": bool(ok)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 def remove_file(path: str):
     try:
         os.remove(path)
@@ -366,39 +624,132 @@ async def tts_endpoint(req: TTSRequest, background_tasks: BackgroundTasks):
     try:
         print(f"{YELLOW}🎤 TTS İstendi: {req.text}{RESET}")
         print(f"   Model Yolu: {PIPER_MODEL}")
+        print(f"   Piper Bin: {PIPER_BIN}")
         
         if not os.path.exists(PIPER_MODEL):
              print(f"{RED}❌ HATA: Model dosyası bulunamadı! {PIPER_MODEL}{RESET}")
              raise HTTPException(status_code=500, detail="Model file not found backend")
+        if isinstance(PIPER_BIN, str) and (os.path.isabs(PIPER_BIN) or os.path.sep in PIPER_BIN):
+            if not os.path.exists(PIPER_BIN):
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Piper executable not found: {PIPER_BIN}. "
+                        "Set PIPER_BIN to a valid piper.exe path (standalone Piper recommended on Windows)."
+                    ),
+                )
 
         filename = f"tts_{uuid.uuid4()}.wav"
         output_path = TEMP_DIR / filename
         
-        # Run Piper
+        # Write text to temporary file (avoids stdin encoding issues on Windows)
+        text_filename = f"tts_input_{uuid.uuid4()}.txt"
+        text_path = TEMP_DIR / text_filename
+        
+        with open(text_path, "w", encoding="utf-8") as f:
+            f.write(req.text)
+        
+        # Convert all paths to absolute to avoid issues with Turkish characters in parent dirs
+        abs_model_path = os.path.abspath(PIPER_MODEL)
+        abs_config_path = os.path.abspath(PIPER_CONFIG)
+        abs_output_path = os.path.abspath(str(output_path))
+        abs_text_path = os.path.abspath(str(text_path))
+        
+        # Run Piper from FULLY ISOLATED environment
+        # All paths (Exe, Model, Config, Output, CWD) will be in %TEMP% (Safe, ASCII)
+        
+        if SAFE_PIPER_BIN and SAFE_PIPER_DIR:
+            executable = SAFE_PIPER_BIN
+            cwd_dir = SAFE_PIPER_DIR
+            
+            # Model filename from config
+            model_filename = os.path.basename(PIPER_MODEL)
+            config_filename = os.path.basename(PIPER_CONFIG)
+            
+            safe_model_path = os.path.join(SAFE_PIPER_DIR, "models", model_filename)
+            safe_config_path = os.path.join(SAFE_PIPER_DIR, "models", config_filename)
+            
+            # Temporary output in safe dir
+            safe_output_filename = f"out_{uuid.uuid4()}.wav"
+            safe_output_path = os.path.join(SAFE_PIPER_DIR, safe_output_filename)
+            
+        else:
+            # Fallback to mixed mode (might fail on Windows)
+            executable = PIPER_BIN
+            cwd_dir = os.path.dirname(os.path.abspath(PIPER_BIN)) if os.path.exists("tools/piper") else os.getcwd()
+            safe_model_path = os.path.abspath(PIPER_MODEL)
+            safe_config_path = os.path.abspath(PIPER_CONFIG)
+            safe_output_path = os.path.abspath(str(output_path))
+
         cmd = [
-            "piper",
-            "-m", PIPER_MODEL,
-            "-c", PIPER_CONFIG,
-            "-f", str(output_path),
+            executable,
+            "-m", safe_model_path,
+            "-c", safe_config_path,
+            "-f", safe_output_path,
             "--length-scale", "0.95"
         ]
         
-        print(f"   Komut: {cmd}")
+        # print(f"   Komut: {cmd}")
+        # print(f"   CWD: {cwd_dir}")
+        # print(f"   Text File: {text_path}")
 
-        process = subprocess.run(
-            cmd,
-            input=req.text,
-            text=True,
-            capture_output=True
-            # encoding arg removed, falling back to system default (safer for now)
-        )
+        try:
+            # Use input string directly if file reading is problematic, 
+            # but usually file input works best for encoding.
+            # We'll use the temp text file we already created.
+            with open(text_path, "r", encoding="utf-8") as f:
+                process = subprocess.run(
+                    cmd,
+                    stdin=f,
+                    capture_output=True,
+                    text=True,
+                    cwd=cwd_dir
+                )
+            
+            if process.returncode != 0:
+                print(f"{RED}Piper Error: {process.stderr}{RESET}")
+                print(f"{RED}Piper Stdout: {process.stdout}{RESET}")
+                raise Exception(process.stderr)
+                
+            # Move the safe output to the expected project temp location
+            if SAFE_PIPER_DIR and os.path.exists(safe_output_path):
+                shutil.move(safe_output_path, str(output_path))
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Piper command not found. "
+                    "On Windows, install standalone Piper and set PIPER_BIN to piper.exe, then restart backend."
+                ),
+            )
         
         if process.returncode != 0:
             print(f"{RED}Piper Error: {process.stderr}{RESET}")
-            raise Exception(f"TTS Generation failed: {process.stderr}")
+            stderr = (process.stderr or "").strip()
+            if "espeakbridge" in stderr:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "Piper failed due to missing espeak phonemizer component (espeakbridge). "
+                        "This commonly happens on Windows with some pip-installed piper-tts builds. "
+                        "Fix: download a standalone Piper release (piper.exe) and set PIPER_BIN to its full path, "
+                        "then restart backend."
+                    ),
+                )
+            raise Exception(f"TTS Generation failed: {stderr}")
             
-        # Add background task to remove file after response is sent
+        # Check file size
+        if os.path.exists(output_path):
+            size = os.path.getsize(output_path)
+            # print(f"   Audio Generated: {size} bytes")
+            if size < 100:
+                print(f"{RED}⚠️ Audio file too small! Possible silence.{RESET}")
+        else:
+             print(f"{RED}❌ Audio file missing!{RESET}")
+             
+        # Add background tasks to remove files after response is sent
         background_tasks.add_task(remove_file, str(output_path))
+        background_tasks.add_task(remove_file, str(text_path))
             
         # Return file
         return FileResponse(
@@ -476,6 +827,9 @@ async def startup_event():
         ollama_warmup()
     except Exception as e:
         print(f"{RED}⚠️ Ollama Error: {e}{RESET}")
+
+    # 1.5 Setup Safe Piper (Tmp Dir)
+    setup_safe_piper()
 
     # 2. Start/Check Stable Diffusion
     print(f"{YELLOW}🎨 Checking Stable Diffusion...{RESET}")

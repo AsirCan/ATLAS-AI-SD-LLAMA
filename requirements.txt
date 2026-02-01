@@ -2,13 +2,12 @@ requests
 feedparser
 instagrapi
 SpeechRecognition
-pyaudio
-sounddevice
-soundfile
-numpy
 huggingface_hub
 fastapi
 uvicorn
 piper-tts
 python-multipart
 python-dotenv
+pydub
+keyring
+pathvalidate

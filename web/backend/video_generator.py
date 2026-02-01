@@ -4,40 +4,12 @@ import uuid
 import subprocess
 import time
 import datetime
-import requests
 from pathlib import Path
-from core.llm import MODEL, OLLAMA_URL
+from core.llm import get_llm_service, unload_ollama
 from core.sd_client import resim_ciz
 from core.news_fetcher import get_top_3_separate_news
-from core.tts import PIPER_MODEL, PIPER_CONFIG
+from core.tts_config import PIPER_MODEL, PIPER_CONFIG
 from core.config import SD_WIDTH, SD_HEIGHT
-
-# Helper for VRAM clearing
-def free_ollama_vram():
-    """Unloads Ollama from VRAM explicitly."""
-    try:
-        payload = {"model": MODEL, "keep_alive": 0}
-        requests.post(OLLAMA_URL, json=payload, timeout=3)
-        print("🧹 Ollama VRAM temizlendi (Unloaded).")
-    except Exception as e:
-        print(f"VRAM Clean Warning: {e}")
-
-def ask_ollama_english(msg):
-    try:
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a creative AI visual director. You MUST write in ENGLISH only."},
-                {"role": "user", "content": msg}
-            ],
-            "stream": False
-        }
-        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
-        r.raise_for_status()
-        return r.json()["message"]["content"].strip()
-    except Exception as e:
-        print(f"LLM Error: {e}")
-        return "A cinematic news image."
 
 def generate_news_script(news_title):
     prompt = (
@@ -53,17 +25,13 @@ def generate_news_script(news_title):
     )
     
     try:
-        payload = {
-            "model": MODEL,
-            "messages": [
-                 {"role": "system", "content": "You are a Turkish News Anchor. Speak Turkish."},
-                 {"role": "user", "content": prompt}
-            ],
-            "stream": False
-        }
-        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
-        r.raise_for_status()
-        return r.json()["message"]["content"].strip().replace('"', '')
+        text = get_llm_service().ask(
+            prompt,
+            system="You are a Turkish News Anchor. Speak Turkish.",
+            timeout=60,
+            retries=1,
+        )
+        return text.strip().replace('"', '')
     except Exception as e:
         print(f"Script Gen Error: {e}")
         return f"Gündemdeki gelişme: {news_title}."
@@ -75,7 +43,11 @@ def generate_visual_prompt(news_title):
         f"Style: National Geographic, Award-winning photography, 8k, highly detailed, dramatic lighting.\n"
         f"Output ONLY the English prompt."
     )
-    return ask_ollama_english(prompt)
+    try:
+        return get_llm_service().ask_english(prompt, timeout=60, retries=1)
+    except Exception as e:
+        print(f"LLM Error: {e}")
+        return "A cinematic news image."
 
 import re
 
@@ -217,7 +189,7 @@ def process_daily_news_video(progress_callback=print):
     
     # UNLOAD LLM NOW
     progress_callback("🧹 VRAM Temizleniyor (LLM Kapatılıyor)...")
-    free_ollama_vram()
+    unload_ollama()
     time.sleep(2)
     
     clip_paths = []

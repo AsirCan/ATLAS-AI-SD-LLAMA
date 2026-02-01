@@ -1,15 +1,12 @@
-
-import requests
 import feedparser
 import random
-import difflib
-import os
 
 RSS_SOURCES = [
     "http://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.sciencedaily.com/rss/top/science.xml",
     "https://www.wired.com/feed/category/science/latest/rss",
-    "https://futurism.com/feed"
+    "https://futurism.com/feed",
+    "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
 ]
 
 def fetch_all_news(limit=100):

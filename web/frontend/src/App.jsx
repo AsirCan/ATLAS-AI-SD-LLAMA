@@ -6,6 +6,7 @@ import GallerySidebar from './components/GallerySidebar';
 import Sidebar from './components/Sidebar';
 import { ClockWidget, SystemWidget } from './components/Widgets';
 import InteractiveBackground from './components/InteractiveBackground';
+import LogTerminal from './components/LogTerminal';
 import './index.css';
 
 function App() {
@@ -27,6 +28,20 @@ function App() {
     const [studioStep, setStudioStep] = useState('idle'); // idle, generating, review, uploading, done
     const [progress, setProgress] = useState(0);
     const [videoStatusText, setVideoStatusText] = useState('');
+    const [agentLogs, setAgentLogs] = useState([]);
+    const [agentPercent, setAgentPercent] = useState(0);
+    const [agentStage, setAgentStage] = useState('idle');
+    const [agentStatus, setAgentStatus] = useState('idle'); // idle | running | done | error
+    const [agentCancelRequested, setAgentCancelRequested] = useState(false);
+    const [showInstaLogin, setShowInstaLogin] = useState(false);
+    const [instaUser, setInstaUser] = useState('');
+    const [instaPass, setInstaPass] = useState('');
+
+    const isAgentRunning = agentStatus === 'running';
+    const setAppModeSafe = (nextMode) => {
+        if (isAgentRunning) return;
+        setAppMode(nextMode);
+    };
 
     // Reset state when mode changes
     useEffect(() => {
@@ -34,7 +49,50 @@ function App() {
         setGeneratedNews(null);
         setVideoStatusText('');
         setStudioLoading(false);
-    }, [appMode]);
+
+        // Don't wipe agent UI state while agent is still running in background.
+        if (!isAgentRunning) {
+            setAgentLogs([]);
+            setAgentPercent(0);
+            setAgentStage('idle');
+            setAgentStatus('idle');
+            setAgentCancelRequested(false);
+        }
+    }, [appMode, isAgentRunning]);
+
+    // Keep agent progress visible even after navigation
+    useEffect(() => {
+        let interval;
+
+        const tick = async () => {
+            try {
+                const p = await api.checkAgentProgress();
+
+                if (p?.status) setAgentStatus(p.status);
+                if (p?.current_task) setVideoStatusText(p.current_task);
+                if (typeof p?.percent === 'number') setAgentPercent(p.percent);
+                if (p?.stage) setAgentStage(p.stage);
+                if (p?.logs && Array.isArray(p.logs)) setAgentLogs(p.logs);
+                if (p?.cancel_requested) setAgentCancelRequested(true);
+
+                // If user comes back to Studio while the agent is still running,
+                // automatically restore the agent progress screen.
+                if (appMode === 'studio' && p?.status === 'running') {
+                    setStudioStep('generating_agent');
+                }
+            } catch {
+                // ignore polling errors; UI will keep last known state
+            }
+        };
+
+        // Always fetch once on entry to Studio (or while running)
+        if (appMode === 'studio' || isAgentRunning) {
+            tick();
+            interval = setInterval(tick, 1000);
+        }
+
+        return () => clearInterval(interval);
+    }, [appMode, isAgentRunning]);
 
     // Drawing Modal State
     const [showDrawModal, setShowDrawModal] = useState(false);
@@ -396,9 +454,10 @@ function App() {
                 {/* Sidebar */}
                 <Sidebar
                     currentMode={appMode}
-                    setMode={setAppMode}
+                    setMode={setAppModeSafe}
                     isGalleryOpen={galleryOpen}
                     onOpenGallery={() => setGalleryOpen(prev => !prev)}
+                    lockNavigation={isAgentRunning}
                 />
 
                 {/* Content Area */}
@@ -427,8 +486,17 @@ function App() {
 
                                         <div className="flex flex-col gap-4 w-full">
                                             <button
+                                                onClick={() => setShowInstaLogin(true)}
+                                                disabled={studioLoading || isAgentRunning}
+                                                className="w-full py-3 rounded-xl border border-white/10 bg-dark-900 hover:bg-dark-800 transition-colors font-bold"
+                                                title="Şifreyi Windows Credential Manager'a kaydeder"
+                                            >
+                                                Instagram Giriş (Kaydet)
+                                            </button>
+
+                                            <button
                                                 onClick={handleGenerateNews}
-                                                disabled={studioLoading}
+                                                disabled={studioLoading || isAgentRunning}
                                                 className="bg-white text-dark-900 w-full py-4 rounded-xl font-bold text-lg hover:bg-gray-100 transition-transform active:scale-95 flex items-center justify-center gap-3"
                                             >
                                                 {studioLoading ? <RefreshCw className="animate-spin" /> : <Sparkles />}
@@ -478,12 +546,109 @@ function App() {
                                                         setStudioLoading(false);
                                                     }
                                                 }}
-                                                disabled={studioLoading}
+                                                disabled={studioLoading || isAgentRunning}
                                                 className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white w-full py-4 rounded-xl font-bold text-lg hover:shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-3"
                                             >
                                                 {studioLoading ? <RefreshCw className="animate-spin" /> : <Instagram />}
                                                 10'lu Carousel Oluştur
                                             </button>
+
+                                            <button
+                                                onClick={async () => {
+                                                    // Ask for confirmation (Live or Test)
+                                                    const isLive = window.confirm("Canlı Modda (Instagram'a Yükle) çalıştırılsın mı?\n\nTamam = Evet (Live)\nİptal = Hayır (Sadece Test/Dry Run)");
+
+                                                    setStudioLoading(true);
+                                                    setStudioStep('generating_agent'); // New step for simple generic progress
+                                                    setGeneratedNews(null);
+                                                    setAgentCancelRequested(false);
+
+                                                    try {
+                                                        const res = await api.runAutonomousAgent(isLive);
+                                                        if (!res.success) {
+                                                            alert("Hata: " + res.error);
+                                                            setStudioLoading(false);
+                                                            setStudioStep('idle');
+                                                            return;
+                                                        }
+                                                    } catch (err) {
+                                                        alert('Bağlantı Hatası');
+                                                        setStudioStep('idle');
+                                                        setStudioLoading(false);
+                                                    } finally {
+                                                        // Global poller handles progress updates; we only stop the "starting" spinner here.
+                                                        setStudioLoading(false);
+                                                    }
+                                                }}
+                                                disabled={studioLoading || isAgentRunning}
+                                                className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white w-full py-4 rounded-xl font-bold text-lg hover:shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-3"
+                                            >
+                                                {studioLoading ? <RefreshCw className="animate-spin" /> : <Terminal />}
+                                                Otonom Ajan Başlat
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Instagram Login Modal */}
+                                {showInstaLogin && (
+                                    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+                                        <div className="bg-dark-800 border border-white/10 rounded-3xl p-6 w-full max-w-md shadow-2xl scale-in">
+                                            <div className="flex justify-between items-center mb-4">
+                                                <h3 className="text-xl font-bold">Instagram Giriş</h3>
+                                                <button onClick={() => setShowInstaLogin(false)} className="text-gray-400 hover:text-white">
+                                                    <X size={24} />
+                                                </button>
+                                            </div>
+                                            <div className="space-y-3 text-left">
+                                                <p className="text-sm text-gray-400">
+                                                    Şifre projeye yazılmaz. Windows Credential Manager'a kaydedilir.
+                                                </p>
+                                                <input
+                                                    className="w-full bg-dark-900/50 border border-white/10 rounded-xl p-3 text-white focus:border-emerald-500 focus:outline-none"
+                                                    placeholder="Kullanıcı adı"
+                                                    value={instaUser}
+                                                    onChange={(e) => setInstaUser(e.target.value)}
+                                                />
+                                                <input
+                                                    type="password"
+                                                    className="w-full bg-dark-900/50 border border-white/10 rounded-xl p-3 text-white focus:border-emerald-500 focus:outline-none"
+                                                    placeholder="Şifre"
+                                                    value={instaPass}
+                                                    onChange={(e) => setInstaPass(e.target.value)}
+                                                />
+                                                <div className="flex gap-3 pt-2">
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (!instaUser.trim() || !instaPass) return;
+                                                            const res = await api.saveInstagramCredentials(instaUser.trim(), instaPass);
+                                                            if (res?.success) {
+                                                                // Also reset session so next upload forces fresh login
+                                                                await api.resetInstagramSession();
+                                                                setInstaPass('');
+                                                                setShowInstaLogin(false);
+                                                                alert('Kaydedildi. Oturum sıfırlandı. Bir sonraki upload taze login ile yapılacak.');
+                                                            } else {
+                                                                alert('Hata: ' + (res?.error || 'Kaydedilemedi'));
+                                                            }
+                                                        }}
+                                                        className="flex-1 py-3 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                                                    >
+                                                        Kaydet
+                                                    </button>
+                                                    <button
+                                                        onClick={async () => {
+                                                            const ok = window.confirm("Instagram oturum dosyası (insta_session.json) sıfırlansın mı?");
+                                                            if (!ok) return;
+                                                            const res = await api.resetInstagramSession();
+                                                            alert(res?.success ? 'Oturum sıfırlandı.' : 'Sıfırlanamadı.');
+                                                        }}
+                                                        className="px-4 py-3 rounded-xl border border-white/10 bg-dark-900 hover:bg-dark-800 transition-colors text-white"
+                                                    >
+                                                        Oturumu Sıfırla
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -517,6 +682,79 @@ function App() {
                                             <p className="text-2xl font-bold animate-pulse text-white">{videoStatusText || "Carousel Hazırlanıyor..."}</p>
                                             <p className="text-sm text-gray-400">10 farklı görsel oluşturuluyor. Bu işlem birkaç dakika sürebilir.</p>
                                         </div>
+                                    </div>
+                                )}
+
+                                {studioStep === 'generating_agent' && (
+                                    <div className="w-full flex flex-col items-center space-y-6">
+                                        <div className="w-full max-w-2xl space-y-4">
+                                            <div className="text-center space-y-2">
+                                                <p className="text-2xl font-bold text-white">Yapay Zeka Ajanı Çalışıyor</p>
+                                                <p className="text-sm text-gray-400">{videoStatusText || "Durum alınıyor..."}</p>
+                                            </div>
+
+                                            <div className="flex items-center justify-center gap-3">
+                                                <button
+                                                    onClick={async () => {
+                                                        const ok = window.confirm("Ajanı iptal etmek istiyor musun?\n\nNot: Eğer şu an görsel çiziyorsa, güvenli durdurma adım bitince gerçekleşir.");
+                                                        if (!ok) return;
+                                                        setAgentCancelRequested(true);
+                                                        await api.cancelAgent();
+                                                    }}
+                                                    disabled={!isAgentRunning || agentCancelRequested}
+                                                    className={`px-4 py-2 rounded-xl font-bold border transition-all ${agentCancelRequested
+                                                        ? 'bg-gray-800 text-gray-400 border-white/10 cursor-not-allowed'
+                                                        : 'bg-red-600 hover:bg-red-700 text-white border-red-500/30'
+                                                        }`}
+                                                    title="Ajanı güvenli şekilde durdur"
+                                                >
+                                                    {agentCancelRequested ? 'İptal İstendi' : 'İptal Et'}
+                                                </button>
+                                            </div>
+
+                                            {/* Progress Bar */}
+                                            <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden border border-white/10">
+                                                <div
+                                                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-300 ease-out"
+                                                    style={{ width: `${Math.max(0, Math.min(100, agentPercent))}%` }}
+                                                ></div>
+                                            </div>
+                                            <div className="flex items-center justify-between text-xs text-gray-500 font-mono">
+                                                <span>stage: {agentStage}</span>
+                                                <span>{agentPercent}%</span>
+                                            </div>
+
+                                            {/* Step List */}
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                                                {[
+                                                    { id: 'services_check', label: 'Servisler (Ollama/SD)' },
+                                                    { id: 'init', label: 'Ajanlar hazırlanıyor' },
+                                                    { id: 'news', label: 'Haber toplama' },
+                                                    { id: 'risk', label: 'Risk analizi' },
+                                                    { id: 'visual', label: 'Görsel üretimi' },
+                                                    { id: 'caption', label: 'Caption üretimi' },
+                                                    { id: 'schedule', label: 'Zamanlama' },
+                                                    { id: 'publish', label: 'Yayınlama/Dry Run' },
+                                                ].map(step => {
+                                                    const active = agentStage === step.id || (agentStage === 'running' && ['news','risk','visual','caption','schedule','publish'].includes(step.id));
+                                                    const done = agentPercent >= 100 || ['done'].includes(agentStage);
+                                                    return (
+                                                        <div
+                                                            key={step.id}
+                                                            className={`px-3 py-2 rounded-xl border ${active
+                                                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                                                                : 'bg-dark-900/40 border-white/10 text-gray-400'
+                                                                }`}
+                                                        >
+                                                            <span className="font-mono text-xs opacity-70">{step.id}</span>
+                                                            <div className="font-semibold">{step.label}{done && agentStage === 'done' ? '' : ''}</div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        <LogTerminal logs={agentLogs} />
                                     </div>
                                 )}
 
@@ -627,7 +865,7 @@ function App() {
                                             <div className="flex gap-4">
                                                 <button
                                                     onClick={handleGenerateNews}
-                                                    disabled={studioLoading}
+                                                    disabled={studioLoading || isAgentRunning}
                                                     className="flex-1 py-3 rounded-xl border border-white/10 bg-dark-900 hover:bg-dark-800 transition-colors flex items-center justify-center gap-2 relative z-20"
                                                 >
                                                     <RefreshCw size={18} />
@@ -708,7 +946,7 @@ function App() {
                                                         setStudioLoading(false);
                                                     }
                                                 }}
-                                                disabled={studioLoading}
+                                                disabled={studioLoading || isAgentRunning}
                                                 className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold transition-colors flex items-center justify-center gap-2"
                                             >
                                                 {studioLoading ? <RefreshCw className="animate-spin" /> : <Film />}
