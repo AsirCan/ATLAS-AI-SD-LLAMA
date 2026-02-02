@@ -9,6 +9,7 @@ from core.agents.scheduler_agent import SchedulerAgent
 # Output
 from core.insta_client import login_and_upload
 from core.agents.base import CancelledError
+from core.news_memory import mark_used_titles
 
 class Orchestrator:
     def __init__(self, dry_run: bool = True):
@@ -91,6 +92,11 @@ class Orchestrator:
             if not self.state.generated_images:
                 self._log("GUARD FAILURE: No images generated. Aborting.")
                 return self.state
+            # Mark the used news title after successful visual generation
+            if self.state.safe_news_items:
+                used_title = self.state.safe_news_items[0].get("title")
+                if used_title:
+                    mark_used_titles([used_title], source="agent")
 
             # 4. Captioning
             self._log("Step 4/6: Captioning")

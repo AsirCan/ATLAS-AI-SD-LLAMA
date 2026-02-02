@@ -1,30 +1,13 @@
 import time
 import feedparser
-import os
 import difflib
 import random
 
 from core.llm import get_llm_service, unload_ollama
 from core.sd_client import resim_ciz
 from core.news_fetcher import RSS_SOURCES
-
-HISTORY_FILE = "used_news_log.txt" 
-
-# 👇 HAFIZA SİSTEMİ 👇
-def get_used_news():
-    """Daha önce kullanılan haberleri dosyadan okur."""
-    if not os.path.exists(HISTORY_FILE):
-        return []
-    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f.readlines() if line.strip()]
-
-def save_used_news(news_list):
-    """Seçilen haberleri dosyaya kaydeder."""
-    with open(HISTORY_FILE, "a", encoding="utf-8") as f:
-        for news in news_list:
-            clean = news.replace("- ", "").replace("-", "").strip()
-            if clean:
-                f.write(clean + "\n")
+from core.news_memory import get_used_title_set, mark_used_titles, normalize_title, prune_expired
+from core.config import USED_NEWS_TTL_DAYS
 
 def dunya_gundemini_getir(limit=100):
     tum_basliklar = []
@@ -105,16 +88,16 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
         log_callback("⚠️ Haber kaynağına ulaşılamadı.")
         return False, None, "No news"
 
-    # --- FİLTRELEME (DÜZELTİLEN KISIM) ---
-    kullanilmislar = get_used_news()
-    # Hızlı kontrol için kümeye (set) çeviriyoruz
-    kullanilmis_set = set(kullanilmislar)
+    # --- FİLTRELEME (TTL tabanlı SQLite hafıza) ---
+    ttl_seconds = USED_NEWS_TTL_DAYS * 24 * 60 * 60
+    prune_expired(ttl_seconds)
+    kullanilmis_set = get_used_title_set(ttl_seconds)
     
     taze_liste = []
     for haber in ham_liste:
         clean_haber = haber.strip()
-        # Eğer haber daha önce kullanılmışlar listesinde YOKSA ekle
-        if clean_haber not in kullanilmis_set:
+        # Eğer haber daha önce kullanılmamışsa ekle
+        if normalize_title(clean_haber) not in kullanilmis_set:
             taze_liste.append(f"- {clean_haber}")
     
     log_callback(f"📉 Filtreleme Sonucu: {len(ham_liste)} haberden {len(taze_liste)} tanesi geriye kaldı.")
@@ -151,7 +134,7 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
             # Bulamazsa mecburen LLM'in dediğini kaydet
             final_save_list.append(clean_item)
 
-    save_used_news(final_save_list)
+    mark_used_titles(final_save_list, source="daily_visual")
     # --------------------------
 
     # 3. Sahneyi Birleştir

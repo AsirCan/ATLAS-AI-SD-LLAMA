@@ -162,6 +162,36 @@ export const api = {
         }
     },
 
+    saveInstagramGraphConfig: async (payload) => {
+        try {
+            const response = await client.post('/instagram/graph-config', payload);
+            return response.data;
+        } catch (error) {
+            console.error('Instagram Graph Config Save Error:', error);
+            return { success: false, error: error.toString() };
+        }
+    },
+
+    getInstagramGraphConfigStatus: async () => {
+        try {
+            const response = await client.get('/instagram/graph-config');
+            return response.data;
+        } catch (error) {
+            console.error('Instagram Graph Config Status Error:', error);
+            return { success: false, error: error.toString() };
+        }
+    },
+
+    getInstagramTokenStatus: async () => {
+        try {
+            const response = await client.get('/instagram/token-status');
+            return response.data;
+        } catch (error) {
+            console.error('Instagram Token Status Error:', error);
+            return { success: false, error: error.toString() };
+        }
+    },
+
     checkProgress: async () => {
         try {
             const response = await client.get('/progress');

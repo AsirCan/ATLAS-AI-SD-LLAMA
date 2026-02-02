@@ -10,6 +10,7 @@ from core.sd_client import resim_ciz
 from core.news_fetcher import get_top_3_separate_news
 from core.tts_config import PIPER_MODEL, PIPER_CONFIG
 from core.config import SD_WIDTH, SD_HEIGHT
+from core.news_memory import mark_used_titles
 
 def generate_news_script(news_title):
     prompt = (
@@ -175,6 +176,9 @@ def process_daily_news_video(progress_callback=print):
     news_items = get_top_3_separate_news()
     if not news_items:
         return False, "Haber bulunamadı."
+    
+    # Mark selected news as used for TTL memory
+    mark_used_titles(news_items, source="video")
         
     # 2. Sequential Generation (Memory Optimized)
     # Step A: Text & Prompts (LLM)

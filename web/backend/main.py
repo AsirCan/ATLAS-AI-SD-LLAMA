@@ -3,13 +3,14 @@ import os
 import shutil
 import uuid
 import subprocess
+import time
 import speech_recognition as sr
 from pathlib import Path
 
 # Add root directory to path to allow importing core
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -150,10 +151,24 @@ class InstaCarouselUploadRequest(BaseModel):
 class InstaCredentialsRequest(BaseModel):
     username: str
     password: str
+
+class InstaGraphConfigRequest(BaseModel):
+    fb_app_id: str = ""
+    fb_app_secret: str = ""
+    fb_page_id: str = ""
+    ig_user_id: str = ""
+    fb_access_token: str = ""
+    public_base_url: str = ""
+    ig_graph_version: str = "v24.0"
     
 @app.get("/")
 def read_root():
     return {"status": "online", "message": "Ses Asistanı Backend Running"}
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    return Response(content="User-agent: *\nAllow: /\n", media_type="text/plain")
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
@@ -571,6 +586,18 @@ def carousel_progress_endpoint():
 @app.post("/api/instagram/upload")
 async def instagram_upload_endpoint(req: InstaUploadRequest):
     try:
+        token_status = _graph_token_status_from_env()
+        if token_status.get("configured"):
+            if not token_status.get("success"):
+                return {
+                    "success": False,
+                    "message": "Graph token kontrolu basarisiz. Token durumunu UI'dan yenileyip tekrar dene.",
+                }
+            if not token_status.get("is_valid", False):
+                return {
+                    "success": False,
+                    "message": "FB_ACCESS_TOKEN gecersiz veya suresi dolmus. Graph Explorer'dan yeni token alip UI'dan kaydet.",
+                }
         success, message = login_and_upload(req.image_path, req.caption)
         return {"success": success, "message": message}
     except Exception as e:
@@ -609,11 +636,177 @@ async def instagram_session_reset_endpoint():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/instagram/graph-config")
+async def instagram_graph_config_endpoint(req: InstaGraphConfigRequest):
+    """Saves Graph API fields into .env for first-time setup from UI."""
+    try:
+        values = _upsert_env_values({
+            "FB_APP_ID": req.fb_app_id,
+            "FB_APP_SECRET": req.fb_app_secret,
+            "FB_PAGE_ID": req.fb_page_id,
+            "IG_USER_ID": req.ig_user_id,
+            "FB_ACCESS_TOKEN": req.fb_access_token,
+            "PUBLIC_BASE_URL": req.public_base_url,
+            "IG_GRAPH_VERSION": req.ig_graph_version or "v24.0",
+        })
+        ready = all(values.get(k, "").strip() for k in [
+            "FB_APP_ID",
+            "FB_APP_SECRET",
+            "FB_PAGE_ID",
+            "IG_USER_ID",
+            "FB_ACCESS_TOKEN",
+            "PUBLIC_BASE_URL",
+        ])
+        return {"success": True, "graph_ready": ready}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/instagram/graph-config")
+async def instagram_graph_config_get_endpoint():
+    """Returns Graph API setup completeness for UI status badges."""
+    try:
+        env_path = Path(".env")
+        values = {}
+        if env_path.exists():
+            for ln in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = ln.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                values[k.strip()] = v.strip()
+
+        keys = ["FB_APP_ID", "FB_APP_SECRET", "FB_PAGE_ID", "IG_USER_ID", "FB_ACCESS_TOKEN", "PUBLIC_BASE_URL"]
+        filled = [k for k in keys if values.get(k)]
+        return {
+            "success": True,
+            "graph_ready": len(filled) == len(keys),
+            "filled_count": len(filled),
+            "required_count": len(keys),
+            "public_base_url": values.get("PUBLIC_BASE_URL", ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/instagram/token-status")
+async def instagram_token_status_endpoint():
+    """Returns Graph access token validity and expiration status."""
+    try:
+        return _graph_token_status_from_env()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 def remove_file(path: str):
     try:
         os.remove(path)
     except Exception:
         pass
+
+def _upsert_env_values(env_updates: dict):
+    env_path = Path(".env")
+    existing = {}
+    lines = []
+
+    if env_path.exists():
+        raw = env_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        lines = raw[:]
+        for ln in raw:
+            s = ln.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            existing[k.strip()] = v
+
+    for key, value in env_updates.items():
+        if value is None:
+            continue
+        value = str(value).strip()
+        updated = False
+        for i, ln in enumerate(lines):
+            if ln.strip().startswith(f"{key}="):
+                lines[i] = f"{key}={value}"
+                updated = True
+                break
+        if not updated:
+            lines.append(f"{key}={value}")
+        existing[key] = value
+
+    env_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return existing
+
+def _read_env_values():
+    env_path = Path(".env")
+    values = {}
+    if env_path.exists():
+        for ln in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            s = ln.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            values[k.strip()] = v.strip()
+    return values
+
+def _graph_token_status_from_env():
+    values = _read_env_values()
+    app_id = values.get("FB_APP_ID", "").strip()
+    app_secret = values.get("FB_APP_SECRET", "").strip()
+    access_token = values.get("FB_ACCESS_TOKEN", "").strip()
+
+    configured = bool(app_id and app_secret and access_token)
+    if not configured:
+        return {
+            "success": True,
+            "configured": False,
+            "is_valid": False,
+            "needs_refresh": False,
+            "message": "Token kontrolu icin FB_APP_ID, FB_APP_SECRET ve FB_ACCESS_TOKEN gerekli.",
+        }
+
+    app_token = f"{app_id}|{app_secret}"
+    try:
+        r = requests.get(
+            "https://graph.facebook.com/debug_token",
+            params={"input_token": access_token, "access_token": app_token},
+            timeout=20,
+        )
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        if not r.ok:
+            return {
+                "success": False,
+                "configured": True,
+                "is_valid": False,
+                "needs_refresh": True,
+                "message": f"Token debug hatasi: {body or r.text}",
+            }
+
+        data = body.get("data", {}) if isinstance(body, dict) else {}
+        is_valid = bool(data.get("is_valid"))
+        expires_at = int(data.get("expires_at") or 0)
+        data_access_expires_at = int(data.get("data_access_expires_at") or 0)
+        now = int(time.time())
+        expires_in = None if expires_at <= 0 else max(0, expires_at - now)
+        needs_refresh = (not is_valid) or (expires_in is not None and expires_in < 7 * 24 * 3600)
+
+        return {
+            "success": True,
+            "configured": True,
+            "is_valid": is_valid,
+            "needs_refresh": needs_refresh,
+            "expires_at": expires_at if expires_at > 0 else None,
+            "expires_in_seconds": expires_in,
+            "data_access_expires_at": data_access_expires_at if data_access_expires_at > 0 else None,
+            "scopes": data.get("scopes", []),
+            "type": data.get("type"),
+            "app_id": data.get("app_id"),
+            "message": "ok" if is_valid else "Token invalid.",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "configured": True,
+            "is_valid": False,
+            "needs_refresh": True,
+            "message": f"Token debug istegi basarisiz: {e}",
+        }
         
 @app.post("/api/tts")
 async def tts_endpoint(req: TTSRequest, background_tasks: BackgroundTasks):

@@ -1,18 +1,69 @@
 import os
 import time
+import requests
+import base64
+from pathlib import Path
+from urllib.parse import urlparse
 from instagrapi import Client
 from instagrapi.exceptions import TwoFactorRequired, ChallengeRequired, LoginRequired
 from core.llm import llm_answer
-from core.config import RED, GREEN, YELLOW, RESET, INSTA_USERNAME
+from core.config import RED, GREEN, YELLOW, RESET, INSTA_USERNAME, INSTA_SESSIONID
 
 try:
     import keyring
 except Exception:
     keyring = None
 
+try:
+    from dotenv import dotenv_values
+except Exception:
+    dotenv_values = None
+
 SESSION_FILE = "insta_session.json"
 KEYRING_SERVICE = "atlas-instagram"
 KEYRING_ACTIVE_USER = "__active_username__"
+IMGBB_API_KEY = os.getenv("IMGBB_API_KEY", "").strip()
+
+
+class GraphAPIError(RuntimeError):
+    def __init__(self, body: dict):
+        self.body = body if isinstance(body, dict) else {"raw": str(body)}
+        err = self.body.get("error", {}) if isinstance(self.body, dict) else {}
+        msg = err.get("message") or str(self.body)
+        super().__init__(f"Graph API error: {msg}")
+
+    @property
+    def code(self):
+        return (self.body.get("error") or {}).get("code")
+
+    @property
+    def subcode(self):
+        return (self.body.get("error") or {}).get("error_subcode")
+
+
+def _read_runtime_env() -> dict:
+    """
+    Read config from current process env and latest .env file.
+    .env wins so UI-saved values work without a full process restart.
+    """
+    values = dict(os.environ)
+    env_path = Path(".env")
+    if dotenv_values and env_path.exists():
+        try:
+            file_vals = dotenv_values(str(env_path))
+            for k, v in file_vals.items():
+                if v is not None:
+                    values[k] = str(v)
+        except Exception:
+            pass
+    return values
+
+
+def _cfg(name: str, default: str = "") -> str:
+    v = (_read_runtime_env().get(name) or default or "").strip()
+    if name == "PUBLIC_BASE_URL":
+        return v.rstrip("/")
+    return v
 
 def set_instagram_credentials(username: str, password: str) -> bool:
     """
@@ -50,6 +101,289 @@ def get_instagram_credentials():
             password = None
 
     return username, password
+
+def _is_graph_api_enabled() -> bool:
+    return bool(_cfg("IG_USER_ID") and _cfg("FB_ACCESS_TOKEN"))
+
+def _as_public_image_url(image_path_or_url: str) -> str:
+    """
+    Instagram Graph API needs a publicly reachable URL.
+    - If a URL is already given, use it as-is.
+    - If a local file is given, convert it using PUBLIC_BASE_URL + /images/... mapping.
+    """
+    src = (image_path_or_url or "").strip()
+    if src.startswith("http://") or src.startswith("https://"):
+        # If frontend sent localhost URL, rewrite it to tunnel URL for Graph API.
+        parsed = urlparse(src)
+        if parsed.hostname in {"127.0.0.1", "localhost"}:
+            public_base = _cfg("PUBLIC_BASE_URL")
+            if not public_base:
+                raise ValueError("Local image URL verildi ama PUBLIC_BASE_URL yok.")
+            path = parsed.path or ""
+            if path.startswith("/images/"):
+                suffix = path[len("/images/"):]
+                return f"{public_base}/images/{suffix}"
+        return src
+
+    public_base = _cfg("PUBLIC_BASE_URL")
+    if not public_base:
+        raise ValueError(
+            "Graph API upload icin PUBLIC_BASE_URL gerekli (or: https://your-domain.com)."
+        )
+
+    img_root = Path("generated_images").resolve()
+    src_path = Path(src).resolve()
+
+    try:
+        rel = src_path.relative_to(img_root).as_posix()
+    except ValueError as e:
+        raise ValueError(
+            "Graph API local dosya yolu sadece generated_images altindan destekleniyor."
+        ) from e
+
+    return f"{public_base}/images/{rel}"
+
+def _ensure_graph_image_ready(image_path_or_url: str) -> str:
+    """
+    Instagram Graph API is strict with media fetching and accepts JPEG reliably.
+    If local media is not jpg/jpeg, convert to jpg before building public URL.
+    """
+    src = (image_path_or_url or "").strip()
+    if src.startswith("http://") or src.startswith("https://"):
+        return src
+
+    src_path = Path(src)
+    ext = src_path.suffix.lower()
+    if ext in [".jpg", ".jpeg"]:
+        return src
+
+    # Convert unsupported/fragile formats (png/webp/etc.) to jpg in same folder
+    try:
+        from PIL import Image
+        converted = src_path.with_name(f"{src_path.stem}_graph.jpg")
+        img = Image.open(src_path).convert("RGB")
+        img.save(converted, format="JPEG", quality=95)
+        return str(converted)
+    except Exception as e:
+        raise RuntimeError(f"Graph image conversion failed: {e}")
+
+def _graph_post(endpoint: str, payload: dict) -> dict:
+    ig_graph_version = _cfg("IG_GRAPH_VERSION", "v24.0")
+    fb_access_token = _cfg("FB_ACCESS_TOKEN")
+    url = f"https://graph.facebook.com/{ig_graph_version}/{endpoint.lstrip('/')}"
+    data = dict(payload)
+    data["access_token"] = fb_access_token
+    r = requests.post(url, data=data, timeout=60)
+    try:
+        body = r.json()
+    except Exception:
+        body = {"raw": r.text}
+
+    if not r.ok or "error" in body:
+        raise GraphAPIError(body)
+    return body
+
+
+def _discover_ig_user_id() -> str:
+    """
+    Fallback discovery when IG_USER_ID is missing/wrong.
+    Uses FB_PAGE_ID first, then /me/accounts list.
+    """
+    fb_access_token = _cfg("FB_ACCESS_TOKEN")
+    if not fb_access_token:
+        return ""
+
+    ig_graph_version = _cfg("IG_GRAPH_VERSION", "v24.0")
+    fb_page_id = _cfg("FB_PAGE_ID")
+    if fb_page_id:
+        try:
+            page_resp = requests.get(
+                f"https://graph.facebook.com/{ig_graph_version}/{fb_page_id}",
+                params={
+                    "fields": "instagram_business_account",
+                    "access_token": fb_access_token,
+                },
+                timeout=30,
+            )
+            page_body = page_resp.json()
+            ig_obj = (page_body or {}).get("instagram_business_account") or {}
+            ig_id = str(ig_obj.get("id") or "").strip()
+            if ig_id:
+                return ig_id
+        except Exception:
+            pass
+
+    try:
+        accounts_resp = requests.get(
+            f"https://graph.facebook.com/{ig_graph_version}/me/accounts",
+            params={
+                "fields": "id,name,instagram_business_account",
+                "access_token": fb_access_token,
+            },
+            timeout=30,
+        )
+        accounts_body = accounts_resp.json() if accounts_resp.ok else {}
+        for page in (accounts_body or {}).get("data", []):
+            ig_obj = page.get("instagram_business_account") or {}
+            ig_id = str(ig_obj.get("id") or "").strip()
+            if ig_id:
+                return ig_id
+    except Exception:
+        pass
+
+    return ""
+
+
+def _is_invalid_object_id_error(e: Exception) -> bool:
+    return isinstance(e, GraphAPIError) and e.code == 100 and e.subcode == 33
+
+
+def _is_media_fetch_error(e: Exception) -> bool:
+    if not isinstance(e, GraphAPIError):
+        return False
+    err = (e.body.get("error") or {}) if isinstance(e.body, dict) else {}
+    code = err.get("code")
+    sub = err.get("error_subcode")
+    msg = str(err.get("message") or "").lower()
+    user_msg = str(err.get("error_user_msg") or "").lower()
+    return (
+        (code == 9004 and sub == 2207052)
+        or ("only photo or video can be accepted as media type" in msg)
+        or ("medya uri" in user_msg)
+        or ("media uri" in user_msg)
+    )
+
+
+def _upload_temp_public_image(local_image_path: str) -> str:
+    """
+    Upload local image to a temporary public host as a fallback when tunnel URL
+    is not accepted by Instagram fetchers.
+    """
+    p = Path(local_image_path)
+    if not p.exists():
+        raise RuntimeError(f"Fallback upload file not found: {local_image_path}")
+
+    # 1) 0x0.st (simple, no key)
+    try:
+        with p.open("rb") as f:
+            r = requests.post(
+                "https://0x0.st",
+                files={"file": (p.name, f, "image/jpeg")},
+                timeout=60,
+            )
+        if r.ok:
+            url = (r.text or "").strip()
+            if url.startswith("http://") or url.startswith("https://"):
+                return url
+    except Exception:
+        pass
+
+    # 2) catbox.moe fallback
+    try:
+        with p.open("rb") as f:
+            r = requests.post(
+                "https://catbox.moe/user/api.php",
+                data={"reqtype": "fileupload"},
+                files={"fileToUpload": (p.name, f, "image/jpeg")},
+                timeout=60,
+            )
+        if r.ok:
+            url = (r.text or "").strip()
+            if url.startswith("http://") or url.startswith("https://"):
+                return url
+    except Exception:
+        pass
+
+    raise RuntimeError("Gorsel icin gecici public URL olusturulamadi.")
+
+def _publish_single_with_graph(image_path_or_url: str, caption: str):
+    ig_user_id = _cfg("IG_USER_ID")
+    if not ig_user_id:
+        ig_user_id = _discover_ig_user_id()
+    if not ig_user_id:
+        raise RuntimeError("IG_USER_ID bulunamadi. UI'dan kaydet veya Graph Explorer ile tekrar al.")
+
+    ready_path = _ensure_graph_image_ready(image_path_or_url)
+    image_url = _as_public_image_url(ready_path)
+    try:
+        container = _graph_post(
+            f"{ig_user_id}/media",
+            {"image_url": image_url, "caption": caption or ""},
+        )
+    except Exception as e:
+        if _is_invalid_object_id_error(e):
+            discovered = _discover_ig_user_id()
+            if discovered and discovered != ig_user_id:
+                container = _graph_post(
+                    f"{discovered}/media",
+                    {"image_url": image_url, "caption": caption or ""},
+                )
+                ig_user_id = discovered
+            else:
+                raise
+        elif _is_media_fetch_error(e):
+            # Tunnel URL bazen Meta botlari tarafindan fetch edilemeyebiliyor.
+            # Local dosyayi gecici public hosta yukleyip bir kez daha deniyoruz.
+            src = (ready_path or "").strip()
+            if not (src.startswith("http://") or src.startswith("https://")):
+                fallback_public = _upload_temp_public_image(src)
+                container = _graph_post(
+                    f"{ig_user_id}/media",
+                    {"image_url": fallback_public, "caption": caption or ""},
+                )
+            else:
+                raise
+        else:
+            raise
+    creation_id = container.get("id")
+    if not creation_id:
+        raise RuntimeError(f"Graph API container id missing: {container}")
+
+    time.sleep(2)
+    published = _graph_post(
+        f"{ig_user_id}/media_publish",
+        {"creation_id": creation_id},
+    )
+    return published
+
+def _publish_album_with_graph(image_paths: list[str], caption: str):
+    ig_user_id = _cfg("IG_USER_ID")
+    if not ig_user_id:
+        ig_user_id = _discover_ig_user_id()
+    if not ig_user_id:
+        raise RuntimeError("IG_USER_ID bulunamadi. UI'dan kaydet veya Graph Explorer ile tekrar al.")
+
+    children = []
+    for path in image_paths:
+        ready_path = _ensure_graph_image_ready(path)
+        image_url = _as_public_image_url(ready_path)
+        child = _graph_post(
+            f"{ig_user_id}/media",
+            {"image_url": image_url, "is_carousel_item": "true"},
+        )
+        cid = child.get("id")
+        if not cid:
+            raise RuntimeError(f"Graph API carousel child id missing: {child}")
+        children.append(cid)
+
+    parent = _graph_post(
+        f"{ig_user_id}/media",
+        {
+            "media_type": "CAROUSEL",
+            "children": ",".join(children),
+            "caption": caption or "",
+        },
+    )
+    parent_id = parent.get("id")
+    if not parent_id:
+        raise RuntimeError(f"Graph API carousel parent id missing: {parent}")
+
+    time.sleep(3)
+    published = _graph_post(
+        f"{ig_user_id}/media_publish",
+        {"creation_id": parent_id},
+    )
+    return published
 
 def generate_caption_with_llama(prompt_text):
     print(f"{YELLOW}📝 Llama Instagram için açıklama yazıyor...{RESET}")
@@ -110,6 +444,17 @@ def generate_caption_with_llama(prompt_text):
 
 def login_to_instagram():
     cl = Client()
+    # Optional: Login with sessionid cookie (bypasses blocked password login)
+    if INSTA_SESSIONID:
+        try:
+            print(f"{YELLOW}SessionID ile giriş deneniyor...{RESET}")
+            cl.login_by_sessionid(INSTA_SESSIONID)
+            cl.dump_settings(SESSION_FILE)
+            print(f"{GREEN}SessionID ile giriş başarılı.{RESET}")
+            return cl
+        except Exception as e:
+            print(f"{YELLOW}SessionID ile giriş başarısız: {e}{RESET}")
+
 
     username, password = get_instagram_credentials()
     if not username or not password:
@@ -195,9 +540,18 @@ def login_and_upload(image_path, caption):
     Kullanıcı onayı ARTITK buranın dışındadır (UI veya main.py içinde).
     """
     if not image_path or not os.path.exists(image_path):
-        return False, "Hata: Resim dosyası bulunamadı."
+        if not ((image_path or "").startswith("http://") or (image_path or "").startswith("https://")):
+            return False, "Hata: Resim dosyasi bulunamadi."
 
     try:
+        if _is_graph_api_enabled():
+            print(f"{YELLOW}[InstagramPublisher] Graph API ile tekli gorsel yukleniyor...{RESET}")
+            published = _publish_single_with_graph(image_path, caption)
+            media_id = published.get("id", "")
+            success_msg = f"Fotograf Graph API ile yuklendi. ID: {media_id}"
+            print(f"{GREEN}{success_msg}{RESET}")
+            return True, success_msg
+
         # Giriş Yap
         cl = login_to_instagram()
         if not cl:
@@ -232,6 +586,19 @@ def login_and_upload_album(image_paths, caption):
     """
     if not image_paths or len(image_paths) == 0:
         return False, "Hata: Yüklenecek resim listesi boş."
+
+    if _is_graph_api_enabled():
+        try:
+            print(f"{YELLOW}[InstagramPublisher] Graph API ile carousel yukleniyor...{RESET}")
+            published = _publish_album_with_graph(image_paths, caption)
+            media_id = published.get("id", "")
+            success_msg = f"Album Graph API ile yuklendi. ID: {media_id}"
+            print(f"{GREEN}{success_msg}{RESET}")
+            return True, success_msg
+        except Exception as e:
+            error_msg = f"Graph API album yukleme hatasi: {e}"
+            print(f"{RED}{error_msg}{RESET}")
+            return False, error_msg
 
     # Temp klasör
     temp_dir = "temp_insta_upload"

@@ -43,9 +43,9 @@ python -m venv .venv
 python install.py
 ```
 
-4. `.env.example` → `.env` yap ve Instagram bilgilerini gir:
-   - `INSTA_USERNAME`
-   - Şifre UI’den “Instagram Giriş (Kaydet)” ile Windows Credential Manager’a kaydedilir.
+4. `.env.example` → `.env` yap.
+   - `python install.py` artık Cloudflared helper'ı da kurar.
+   - Graph API değerlerini istersen elle `.env` içine yaz, istersen UI'den kaydet (Studio > Instagram Bağlantı Ayarları > Graph API > "UI'dan .env Kaydet").
 
 5. Uygulamayı başlat:
 
@@ -56,11 +56,13 @@ python run.py
 6. Tarayıcıda açılan arayüzde:
    - **Chat**: yaz/konuş → cevap al.
    - **Studio**: “Günlük Tek İçerik”, “10’lu Carousel” veya “Otonom Ajan”.
+   - **Graph ilk kurulum**: Studio > Instagram Bağlantı Ayarları > Graph API sekmesinde `FB_APP_ID`, `FB_APP_SECRET`, `FB_PAGE_ID`, `IG_USER_ID`, `FB_ACCESS_TOKEN` değerlerini girip kaydet.
    - **Video**: gündem videosu üret.
 
 Notlar:
 - Ajan çalışırken UI diğer işlemleri ve navigasyonu kilitler (GPU/VRAM için).
 - “İptal Et” butonu **güvenli durdurma** yapar; SD çizim anında ise adım bitince durur.
+- Graph API alanları doluysa `python run.py` tunnel helper'ı otomatik başlatır ve `PUBLIC_BASE_URL` günceller (`AUTO_TUNNEL=1`).
 
 ### Gereksinimler
 - **Python**: 3.10+
@@ -77,6 +79,59 @@ Notlar:
   - Çözüm: **standalone Piper** (piper.exe) kullan.
   - `.env` içine `PIPER_BIN=C:\...\piper.exe` yaz **veya** `tools/piper/piper.exe` olarak projeye koy (otomatik bulunur).
 
+### Instagram Graph API kurulumu (yeni kullanıcı için)
+Bu proje Instagram yüklemede öncelikle **Graph API** kullanır (daha stabil). Adımlar:
+
+1. Meta for Developers'ta bir app oluştur (`Business` tipi).
+2. App'e Instagram use case / Instagram API ekle.
+3. Business Settings'te:
+   - Instagram hesabını business'a ekle,
+   - Facebook sayfası ekle,
+   - Instagram hesabını ilgili Facebook sayfasına bağla.
+4. Graph API Explorer'da şu izinlerle User Token üret:
+   - `pages_show_list`
+   - `pages_read_engagement`
+   - `instagram_basic`
+   - `instagram_content_publish`
+5. Doğrulama istekleri:
+   - `/me/accounts?fields=id,name,access_token`
+   - `/{FB_PAGE_ID}?fields=instagram_business_account`
+   - `/{IG_USER_ID}?fields=id,username`
+6. Değerleri `.env` içine yaz:
+   - `FB_PAGE_ID` (`/me/accounts` çıktısından)
+   - `IG_USER_ID` (`instagram_business_account.id`)
+   - `FB_ACCESS_TOKEN` (Explorer token)
+7. `PUBLIC_BASE_URL` ayarla:
+   - Uygulama dış dünyadan erişilebilir bir URL'de olmalı (ör. reverse proxy/tunnel/domain).
+   - Graph API, `generated_images` altındaki dosyaları bu URL üzerinden okur (`/images/...`).
+
+Not:
+- `PUBLIC_BASE_URL` yoksa Graph API ile upload çalışmaz.
+- Graph API alanları boşsa sistem eski yöntem (`instagrapi`) ile devam eder.
+
+### Hangi giriş yöntemini kullanmalıyım?
+- **Öncelik:** Graph API (`FB_*`, `IG_USER_ID`, `PUBLIC_BASE_URL` doluysa)
+- **Legacy Login:** Sadece geçici/backup kullanım için (`INSTA_USERNAME` + UI'den şifre kaydet)
+- Graph API aktifken UI'de Legacy Login yapmak zorunda değilsin.
+
+### Yeni kuran biri için 1 dakikalık kontrol listesi
+`.env` içinde şu alanlar **boş olmamalı**:
+
+```env
+FB_APP_ID=
+FB_APP_SECRET=
+FB_PAGE_ID=
+IG_USER_ID=
+FB_ACCESS_TOKEN=
+PUBLIC_BASE_URL=
+IG_GRAPH_VERSION=v24.0
+```
+
+Hızlı doğrulama (Explorer):
+- `/me/accounts?fields=id,name`
+- `/{FB_PAGE_ID}?fields=instagram_business_account`
+- `/{IG_USER_ID}?fields=id,username`
+
 ### Yükleme
 1. Bağımlılıkları kur:
 
@@ -84,9 +139,8 @@ Notlar:
 python install.py
 ```
 
-2. `.env.example` dosyasını `.env` yap ve gerekli alanları doldur:
-   - `INSTA_USERNAME`
-   - Şifre UI’den “Instagram Giriş (Kaydet)” ile Windows Credential Manager’a kaydedilir.
+2. `.env.example` dosyasını `.env` yap ve Graph API alanlarını doldur:
+   - `FB_APP_ID`, `FB_APP_SECRET`, `FB_PAGE_ID`, `IG_USER_ID`, `FB_ACCESS_TOKEN`, `PUBLIC_BASE_URL`
 
 ## Çalıştırma
 

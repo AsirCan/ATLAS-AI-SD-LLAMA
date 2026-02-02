@@ -3,6 +3,7 @@ import json
 from core.daily_visual_agent import dunya_gundemini_getir
 from core.sd_client import resim_ciz
 from core.llm import get_llm_service, unload_ollama
+from core.config import CAROUSEL_BASE_STYLE
 
 def generate_carousel_content(log_callback=print):
     """
@@ -65,14 +66,17 @@ def generate_carousel_content(log_callback=print):
         "STEP 2:\n"
         "Select ONE clear subject or scene derived from the topic.\n"
         "This subject must remain visually consistent across all slides.\n\n"
+        f"GLOBAL STYLE (must be included in every prompt, keep camera/lighting consistent):\n"
+        f"{CAROUSEL_BASE_STYLE}\n\n"
         "STEP 3:\n"
         "Create 10 prompts that show the SAME subject evolving ONLY along the chosen variation axis.\n\n"
         "STRICT RULES:\n"
         "1. Do NOT change art style.\n"
         "2. Do NOT change the main subject.\n"
-        "3. Keep camera framing consistent.\n"
+        "3. Keep camera framing AND lighting consistent.\n"
         "4. Each slide must feel like the next moment or stage of the same story.\n"
-        "5. Prompts must be high-quality Stable Diffusion prompts in English.\n\n"
+        "5. Prompts must be high-quality Stable Diffusion prompts in English.\n"
+        f"6. Each prompt MUST include the GLOBAL STYLE line verbatim.\n\n"
         "OUTPUT FORMAT (STRICT JSON ONLY):\n"
         "{\n"
         '  "caption": "Write a short Instagram caption that invites users to swipe and comment. END THE CAPTION with 10-15 relevant hashtags mixing popular ones (#ai, #art, #viral) and niche ones (#stablediffusion, #aiart). Example: Great caption text! 🔥\\n\\n#ai #digitalart #technology...",\n'
@@ -102,24 +106,36 @@ def generate_carousel_content(log_callback=print):
         caption = data.get("caption", "")
         
         # Validate slides
+        base_style = CAROUSEL_BASE_STYLE.strip()
+        base_style_l = base_style.lower()
+
         for item in raw_slides:
             if isinstance(item, dict):
                 p_title = item.get("title", "Variation")
                 p_text = item.get("prompt", "")
+                if p_text and base_style_l not in p_text.lower():
+                    p_text = f"{base_style}, {p_text}"
                 if p_text:
                     parsed_slides.append({"title": p_title, "prompt": p_text})
             elif isinstance(item, str):
-                parsed_slides.append({"title": "Scene", "prompt": item})
+                p_text = item
+                if base_style_l not in p_text.lower():
+                    p_text = f"{base_style}, {p_text}"
+                parsed_slides.append({"title": "Scene", "prompt": p_text})
 
         if len(parsed_slides) < 10:
              # Eksikleri tamamla
             while len(parsed_slides) < 10:
-                parsed_slides.append(parsed_slides[0] if parsed_slides else {"title": "Extra", "prompt": f"A creative shot of {topic}"})
+                fallback = {"title": "Extra", "prompt": f"{base_style}, A creative shot of {topic}"}
+                parsed_slides.append(parsed_slides[0] if parsed_slides else fallback)
 
     except Exception as e:
         log_callback(f"❌ JSON Parse Hatası: {e}")
         # Fallback
-        parsed_slides = [{"title": f"Variation {i+1}", "prompt": f"Artistic interpretation of {topic}, variation {i+1}"} for i in range(10)]
+        parsed_slides = [
+            {"title": f"Variation {i+1}", "prompt": f"{CAROUSEL_BASE_STYLE}, Artistic interpretation of {topic}, variation {i+1}"}
+            for i in range(10)
+        ]
 
     # 4. SD Öncesi VRAM Temizliği 
 

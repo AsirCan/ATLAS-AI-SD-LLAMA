@@ -5,6 +5,15 @@ eklenmesi ve düzeltilmesi gerekenleri öncelikli bir yol haritası halinde list
 
 ---
 
+## ✅ Tamamlananlar (2026-02-02)
+- Instagram Graph API tekli görsel upload akışı çalışır hale getirildi.
+- Cloudflare tunnel otomatik kurulum/başlatma (`install.py`, `run.py`, `tools/setup_tunnel.py`) eklendi.
+- UI'ya Graph alanlarını kaydetme ekranı ve adım adım “değerleri nereden alırım” yönergeleri eklendi.
+- Instagram upload hatalarında kullanıcıya daha anlaşılır öneri mesajları eklendi.
+- Graph token geçerlilik/süre kontrolü endpoint + UI durum kartı eklendi.
+
+---
+
 ## 1) Kritik Düzeltmeler (Hemen / 0–2 hafta)
 - UTF‑8 kodlama standardı: tüm .py/.jsx/.md dosyalarını düzgün UTF‑8 olarak normalize et, mojibake (Ã¶, Ã§ vb.) sorununu temizle.
 - `core/sd_client.py`: `response.raise_for_status()` + JSON parse koruması; başarısız yanıtları logla, hataları üst katmana taşı.
@@ -89,4 +98,3 @@ eklenmesi ve düzeltilmesi gerekenleri öncelikli bir yol haritası halinde list
 - Çoklu model desteği (Ollama model switching).
 - A/B prompt testleri (otomatik varyasyon + performans metriği).
 - Kısa içerik takvimi (weekly planner + scheduler).
-

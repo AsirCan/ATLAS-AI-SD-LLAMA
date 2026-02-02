@@ -6,6 +6,12 @@ import sys
 import signal
 import socket
 from shutil import which
+from pathlib import Path
+
+try:
+    from dotenv import dotenv_values
+except Exception:
+    dotenv_values = None
 
 # Renkler
 GREEN = "\033[92m"
@@ -14,6 +20,7 @@ RED = "\033[91m"
 RESET = "\033[0m"
 
 APP_URL = "http://127.0.0.1:5173"
+ENV_FILE = Path(".env")
 
 def wait_for_port(host, port, timeout_sec=60):
     """Wait until a TCP port is accepting connections."""
@@ -35,6 +42,30 @@ def is_port_in_use(host, port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(1)
         return s.connect_ex((host, port)) == 0
+
+def read_env_file():
+    if dotenv_values is None or not ENV_FILE.exists():
+        return {}
+    try:
+        return dict(dotenv_values(str(ENV_FILE)))
+    except Exception:
+        return {}
+
+def has_graph_config(env_map):
+    required = ["FB_APP_ID", "FB_APP_SECRET", "FB_PAGE_ID", "IG_USER_ID", "FB_ACCESS_TOKEN"]
+    return all((env_map.get(k) or "").strip() for k in required)
+
+def wait_for_public_base_url(timeout_sec=20):
+    start = time.time()
+    last_val = ""
+    while time.time() - start < timeout_sec:
+        env_map = read_env_file()
+        val = (env_map.get("PUBLIC_BASE_URL") or "").strip()
+        if val and val != last_val:
+            return val
+        last_val = val
+        time.sleep(0.5)
+    return ""
 
 def check_venv():
     """Sanal ortamda mıyız kontrol eder. Değilse sanal ortam Python'u ile yeniden başlatır."""
@@ -59,6 +90,22 @@ def run_app():
     processes = []
 
     try:
+        env_map = read_env_file()
+        auto_tunnel = (env_map.get("AUTO_TUNNEL") or "1").strip() != "0"
+        if auto_tunnel and has_graph_config(env_map):
+            print("🌐 Graph API aktif: tunnel otomatik başlatılıyor...")
+            tunnel_process = subprocess.Popen(
+                [sys.executable, "tools/setup_tunnel.py"],
+                cwd=os.getcwd()
+            )
+            processes.append(tunnel_process)
+
+            public_url = wait_for_public_base_url(timeout_sec=25)
+            if public_url:
+                print(f"{GREEN}✅ PUBLIC_BASE_URL hazır: {public_url}{RESET}")
+            else:
+                print(f"{YELLOW}⚠️ PUBLIC_BASE_URL henüz hazır değil. Tunnel terminalini kontrol edin.{RESET}")
+
         # 2. Backend Başlat
         print(f"📦 Backend sunucusu açılıyor...")
         backend_process = subprocess.Popen(

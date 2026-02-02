@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Mic, Send, Image as ImageIcon, StopCircle, RefreshCw, Volume2, Sparkles, User, Terminal, Instagram, Camera, Upload, Palette, X, Film, Hexagon, Sun, Moon, Zap, Lightbulb, FileText } from 'lucide-react';
+import { Mic, Send, Image as ImageIcon, StopCircle, RefreshCw, Volume2, Sparkles, User, Terminal, Instagram, Camera, Upload, Palette, X, Film, Hexagon, Sun, Moon, Zap, Lightbulb, FileText, ShieldCheck, KeyRound, Globe, Link2, CheckCircle2, ExternalLink, Copy } from 'lucide-react';
 import { api } from './api';
 import AudioVisualizer from './components/AudioVisualizer';
 import GallerySidebar from './components/GallerySidebar';
@@ -35,6 +35,25 @@ function App() {
     const [showInstaLogin, setShowInstaLogin] = useState(false);
     const [instaUser, setInstaUser] = useState('');
     const [instaPass, setInstaPass] = useState('');
+    const [instaAuthTab, setInstaAuthTab] = useState('graph'); // graph | legacy
+    const [envCopied, setEnvCopied] = useState(false);
+    const [graphConfig, setGraphConfig] = useState({
+        fb_app_id: '',
+        fb_app_secret: '',
+        fb_page_id: '',
+        ig_user_id: '',
+        fb_access_token: '',
+        public_base_url: '',
+        ig_graph_version: 'v24.0',
+    });
+    const [graphStatus, setGraphStatus] = useState({ graph_ready: false, filled_count: 0, required_count: 6 });
+    const [graphTokenStatus, setGraphTokenStatus] = useState({
+        configured: false,
+        is_valid: false,
+        needs_refresh: false,
+        expires_in_seconds: null,
+        message: '',
+    });
 
     const isAgentRunning = agentStatus === 'running';
     const setAppModeSafe = (nextMode) => {
@@ -126,6 +145,13 @@ function App() {
         localStorage.setItem('theme', theme);
     }, [theme]);
 
+    useEffect(() => {
+        if (showInstaLogin) {
+            refreshGraphStatus();
+            refreshGraphTokenStatus();
+        }
+    }, [showInstaLogin]);
+
     const toggleTheme = () => {
         setTheme(prev => prev === 'dark' ? 'light' : 'dark');
     };
@@ -212,6 +238,135 @@ function App() {
         if (isProcessing) return;
         setInput('');
         sendMessage(text);
+    };
+
+    const graphEnvTemplate = [
+        'FB_APP_ID=',
+        'FB_APP_SECRET=',
+        'FB_PAGE_ID=',
+        'IG_USER_ID=',
+        'FB_ACCESS_TOKEN=',
+        'PUBLIC_BASE_URL=',
+        'IG_GRAPH_VERSION=v24.0',
+    ].join('\n');
+
+    const copyGraphEnvTemplate = async () => {
+        try {
+            await navigator.clipboard.writeText(graphEnvTemplate);
+            setEnvCopied(true);
+            setTimeout(() => setEnvCopied(false), 1800);
+        } catch {
+            alert('.env sablonu kopyalanamadi. Elle kopyalayabilirsin.');
+        }
+    };
+
+    const closeInstaModal = () => {
+        setShowInstaLogin(false);
+        setInstaPass('');
+        setEnvCopied(false);
+    };
+
+    const refreshGraphStatus = async () => {
+        const res = await api.getInstagramGraphConfigStatus();
+        if (res?.success) {
+            setGraphStatus({
+                graph_ready: !!res.graph_ready,
+                filled_count: res.filled_count || 0,
+                required_count: res.required_count || 6,
+            });
+            setGraphConfig(prev => ({
+                ...prev,
+                public_base_url: res.public_base_url || prev.public_base_url,
+            }));
+        }
+    };
+
+    const refreshGraphTokenStatus = async () => {
+        const res = await api.getInstagramTokenStatus();
+        if (!res) return;
+        if (res.success === false) {
+            setGraphTokenStatus({
+                configured: true,
+                is_valid: false,
+                needs_refresh: true,
+                expires_in_seconds: null,
+                message: res.message || res.error || 'Token kontrolu basarisiz.',
+            });
+            return;
+        }
+
+        setGraphTokenStatus({
+            configured: !!res.configured,
+            is_valid: !!res.is_valid,
+            needs_refresh: !!res.needs_refresh,
+            expires_in_seconds: typeof res.expires_in_seconds === 'number' ? res.expires_in_seconds : null,
+            message: res.message || '',
+        });
+    };
+
+    const formatExpiresIn = (seconds) => {
+        if (typeof seconds !== 'number') return 'Bilinmiyor';
+        if (seconds <= 0) return 'Doldu';
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        return `${days}g ${hours}s`;
+    };
+
+    const tokenStatusText = () => {
+        if (!graphTokenStatus.configured) return 'Token kontrolu icin alanlar eksik';
+        if (!graphTokenStatus.is_valid) return graphTokenStatus.message || 'Gecersiz token';
+        if (typeof graphTokenStatus.expires_in_seconds !== 'number') return 'Gecerli • Sure bilgisi Meta tarafinda donmedi';
+        if (graphTokenStatus.expires_in_seconds <= 0) return 'Gecerli ama sure dolmus gorunuyor (yeni token al)';
+        return `Gecerli • Kalan: ${formatExpiresIn(graphTokenStatus.expires_in_seconds)}`;
+    };
+
+    const saveGraphConfig = async () => {
+        const res = await api.saveInstagramGraphConfig(graphConfig);
+        if (res?.success) {
+            await refreshGraphStatus();
+            await refreshGraphTokenStatus();
+            alert('Graph ayarlari kaydedildi. Backend yeniden baslatmayi unutma.');
+        } else {
+            alert('Graph ayarlari kaydedilemedi: ' + (res?.error || 'Bilinmeyen hata'));
+        }
+    };
+
+    const formatInstagramUploadError = (rawMessage) => {
+        const msg = String(rawMessage || '');
+        const lower = msg.toLowerCase();
+
+        if (lower.includes('only photo or video can be accepted as media type')) {
+            return [
+                msg,
+                '',
+                'Öneri:',
+                '- Tunnel terminalini açık tut (cloudflared kapanmasın).',
+                '- PUBLIC_BASE_URL güncel olsun.',
+                '- Tekrar dene (sistem fallback ile tekrar dener).',
+            ].join('\n');
+        }
+
+        if (lower.includes('unsupported post request') || (lower.includes('code') && lower.includes('100'))) {
+            return [
+                msg,
+                '',
+                'Öneri:',
+                '- IG_USER_ID / FB_PAGE_ID değerlerini tekrar kontrol et.',
+                '- Graph alanlarını UI’dan yeniden kaydet.',
+            ].join('\n');
+        }
+
+        if (lower.includes('login_required')) {
+            return [
+                msg,
+                '',
+                'Öneri:',
+                '- Graph API modunu kullan.',
+                '- Legacy kullanıyorsan Session Sıfırla ile tekrar login yap.',
+            ].join('\n');
+        }
+
+        return msg;
     };
 
     const [audioStream, setAudioStream] = useState(null);
@@ -417,7 +572,7 @@ function App() {
                     setStudioStep('done_carousel');
                     // setGeneratedNews(null); // Keep data for view
                 } else {
-                    alert('Yükleme Hatası: ' + res.message);
+                    alert('Yükleme Hatası:\n' + formatInstagramUploadError(res.message));
                 }
             }
             // MODE 2: SINGLE IMAGE
@@ -428,7 +583,7 @@ function App() {
                     setStudioStep('done');
                     // setGeneratedNews(null); // Keep data for view
                 } else {
-                    alert('Yükleme Hatası: ' + res.message);
+                    alert('Yükleme Hatası:\n' + formatInstagramUploadError(res.message));
                 }
             }
         } catch (err) {
@@ -515,7 +670,7 @@ function App() {
                                             <Camera className="w-12 h-12 text-white" />
                                         </div>
                                         <h2 className="text-3xl font-bold">Instagram Studio</h2>
-                                        <p className="text-gray-400">
+                                        <p className="text-gray-500 dark:text-gray-400">
                                             İster tek görsel, ister 10'lu kaydırmalı (carousel) içerik üret.
                                         </p>
 
@@ -523,7 +678,7 @@ function App() {
                                             <button
                                                 onClick={() => setShowInstaLogin(true)}
                                                 disabled={studioLoading || isAgentRunning}
-                                                className="w-full py-3 rounded-xl border border-white/10 bg-dark-900 hover:bg-dark-800 transition-colors font-bold"
+                                                className="w-full py-3 rounded-xl border border-gray-300 dark:border-white/10 bg-gray-900 dark:bg-dark-900 text-white hover:bg-gray-800 dark:hover:bg-dark-800 transition-colors font-bold"
                                                 title="Şifreyi Windows Credential Manager'a kaydeder"
                                             >
                                                 Instagram Giriş (Kaydet)
@@ -627,66 +782,189 @@ function App() {
 
                                 {/* Instagram Login Modal */}
                                 {showInstaLogin && (
-                                    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
-                                        <div className="bg-dark-800 border border-white/10 rounded-3xl p-6 w-full max-w-md shadow-2xl scale-in">
-                                            <div className="flex justify-between items-center mb-4">
-                                                <h3 className="text-xl font-bold">Instagram Giriş</h3>
-                                                <button onClick={() => setShowInstaLogin(false)} className="text-gray-400 hover:text-white">
+                                    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[80] flex items-center justify-center p-3 animate-fade-in">
+                                        <div className="bg-white dark:bg-dark-800 border border-gray-200 dark:border-white/10 rounded-3xl p-5 w-full max-w-xl shadow-2xl scale-in max-h-[82vh] overflow-y-auto">
+                                            <div className="flex justify-between items-start mb-5">
+                                                <div>
+                                                    <h3 className="text-xl font-bold text-gray-900 dark:text-white">Instagram Baglanti Merkezi</h3>
+                                                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Graph API onerilir, Legacy login yedek olarak durur.</p>
+                                                </div>
+                                                <button onClick={closeInstaModal} className="text-gray-400 hover:text-gray-900 dark:hover:text-white">
                                                     <X size={24} />
                                                 </button>
                                             </div>
-                                            <div className="space-y-3 text-left">
-                                                <p className="text-sm dark:text-gray-400 text-gray-500">
-                                                    Şifre projeye yazılmaz. Windows Credential Manager'a kaydedilir.
-                                                </p>
-                                                <input
-                                                    className="w-full bg-dark-900/50 border border-white/10 rounded-xl p-3 text-white focus:border-emerald-500 focus:outline-none"
-                                                    placeholder="Kullanıcı adı"
-                                                    value={instaUser}
-                                                    onChange={(e) => setInstaUser(e.target.value)}
-                                                />
-                                                <input
-                                                    type="password"
-                                                    className="w-full bg-dark-900/50 border border-white/10 rounded-xl p-3 text-white focus:border-emerald-500 focus:outline-none"
-                                                    placeholder="Şifre"
-                                                    value={instaPass}
-                                                    onChange={(e) => setInstaPass(e.target.value)}
-                                                />
-                                                <div className="flex gap-3 pt-2">
-                                                    <button
-                                                        onClick={async () => {
-                                                            if (!instaUser.trim() || !instaPass) return;
-                                                            const res = await api.saveInstagramCredentials(instaUser.trim(), instaPass);
-                                                            if (res?.success) {
-                                                                // Also reset session so next upload forces fresh login
-                                                                await api.resetInstagramSession();
-                                                                setInstaPass('');
-                                                                setShowInstaLogin(false);
-                                                                alert('Kaydedildi. Oturum sıfırlandı. Bir sonraki upload taze login ile yapılacak.');
-                                                            } else {
-                                                                alert('Hata: ' + (res?.error || 'Kaydedilemedi'));
-                                                            }
-                                                        }}
-                                                        className="flex-1 py-3 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
-                                                    >
-                                                        Kaydet
-                                                    </button>
-                                                    <button
-                                                        onClick={async () => {
-                                                            const ok = window.confirm("Instagram oturum dosyası (insta_session.json) sıfırlansın mı?");
-                                                            if (!ok) return;
-                                                            const res = await api.resetInstagramSession();
-                                                            alert(res?.success ? 'Oturum sıfırlandı.' : 'Sıfırlanamadı.');
-                                                        }}
-                                                        className="px-4 py-3 rounded-xl border border-white/10 bg-dark-900 hover:bg-dark-800 transition-colors text-white"
-                                                    >
-                                                        Oturumu Sıfırla
-                                                    </button>
-                                                </div>
+
+                                            <div className="flex gap-2 mb-5">
+                                                <button
+                                                    onClick={() => setInstaAuthTab('graph')}
+                                                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition ${instaAuthTab === 'graph'
+                                                        ? 'bg-blue-600 text-white border-blue-500'
+                                                        : 'bg-gray-100 dark:bg-dark-900 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-white/10 hover:bg-gray-200 dark:hover:bg-dark-700'
+                                                        }`}
+                                                >
+                                                    <span className="inline-flex items-center gap-2"><ShieldCheck size={16} /> Graph API</span>
+                                                </button>
+                                                <button
+                                                    onClick={() => setInstaAuthTab('legacy')}
+                                                    className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border transition ${instaAuthTab === 'legacy'
+                                                        ? 'bg-emerald-600 text-white border-emerald-500'
+                                                        : 'bg-gray-100 dark:bg-dark-900 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-white/10 hover:bg-gray-200 dark:hover:bg-dark-700'
+                                                        }`}
+                                                >
+                                                    <span className="inline-flex items-center gap-2"><KeyRound size={16} /> Legacy Login</span>
+                                                </button>
                                             </div>
+
+                                            {instaAuthTab === 'graph' && (
+                                                <div className="space-y-4 text-left">
+                                                    <div className="rounded-xl border border-gray-200 dark:border-white/10 px-4 py-3 bg-white/60 dark:bg-dark-900/60 flex items-center justify-between">
+                                                        <span className="text-sm text-gray-700 dark:text-gray-300">Kurulum durumu</span>
+                                                        <span className={`text-xs font-bold px-2 py-1 rounded-md ${graphStatus.graph_ready ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'}`}>
+                                                            {graphStatus.graph_ready ? 'Hazir' : `${graphStatus.filled_count}/${graphStatus.required_count} alan dolu`}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="rounded-xl border border-gray-200 dark:border-white/10 px-4 py-3 bg-white/60 dark:bg-dark-900/60 flex items-center justify-between gap-3">
+                                                        <div className="text-sm text-gray-700 dark:text-gray-300">
+                                                            <div>Token durumu</div>
+                                                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{tokenStatusText()}</div>
+                                                        </div>
+                                                        <span className={`text-xs font-bold px-2 py-1 rounded-md ${
+                                                            !graphTokenStatus.configured
+                                                                ? 'bg-gray-100 text-gray-600 dark:bg-gray-700/50 dark:text-gray-300'
+                                                                : (graphTokenStatus.needs_refresh
+                                                                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'
+                                                                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300')
+                                                        }`}>
+                                                            {!graphTokenStatus.configured ? 'Bilinmiyor' : (graphTokenStatus.needs_refresh ? 'Yenile' : 'Saglam')}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-dark-900 p-4">
+                                                        <p className="font-semibold text-gray-900 dark:text-white mb-2">Graph API Bilgilerini Alma ve Alana Yerleştirme (Detaylı)</p>
+                                                        <div className="space-y-2 text-xs text-gray-700 dark:text-gray-300">
+                                                            <p><b>0)</b> Graph API Explorer ekranında <b>User Token</b> seçin ve şu izinleri ekleyin: <b>pages_show_list</b>, <b>pages_read_engagement</b>, <b>instagram_basic</b>, <b>instagram_content_publish</b>.</p>
+                                                            <p><b>1)</b> Graph API Explorer’ın sağ panelindeki token değerini kopyalayıp <b>FB_ACCESS_TOKEN</b> alanına yapıştırın.</p>
+                                                            <p><b>2)</b> Endpoint alanına <code className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">/me/accounts?fields=id,name</code> yazıp <b>Submit</b> edin. Dönen listede kullanacağınız Facebook sayfasının <b>id</b> değerini alıp <b>FB_PAGE_ID</b> alanına girin.</p>
+                                                            <p><b>3)</b> Endpoint alanına <code className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">/{'{FB_PAGE_ID}'}?fields=instagram_business_account</code> yazıp <b>Submit</b> edin. Sonuçtaki <b>instagram_business_account.id</b> değerini alıp <b>IG_USER_ID</b> alanına girin.</p>
+                                                            <p><b>4)</b> <b>Meta Developers {'>'} App settings {'>'} Basic</b> ekranından: <b>App ID</b> değerini <b>FB_APP_ID</b> alanına, <b>App Secret (Show)</b> değerini <b>FB_APP_SECRET</b> alanına girin.</p>
+                                                            <p><b>5)</b> <code className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">python run.py</code> komutunu çalıştırın. Tünel başlatıldığında <b>PUBLIC_BASE_URL</b> alanı otomatik doldurulur. Otomatik dolmazsa <code className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/10">https://*.trycloudflare.com</code> formatındaki adresi manuel olarak girin.</p>
+                                                            <p><b>6)</b> Tüm alanları kaydedip <b>Durumu Yenile</b> butonuna basın. Kurulum ve token göstergelerinin yeşil olması gerekir.</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="rounded-2xl border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 p-4">
+                                                        <p className="font-semibold text-blue-700 dark:text-blue-300">Onerilen kurulum (stabil)</p>
+                                                        <ul className="mt-2 space-y-2 text-sm text-blue-800 dark:text-blue-200">
+                                                            <li className="flex items-start gap-2"><CheckCircle2 size={16} className="mt-0.5 shrink-0" /> Meta App + Business + Page + IG baglantisini kur.</li>
+                                                            <li className="flex items-start gap-2"><CheckCircle2 size={16} className="mt-0.5 shrink-0" /> Graph API Explorer ile token ve ID degerlerini al.</li>
+                                                            <li className="flex items-start gap-2"><CheckCircle2 size={16} className="mt-0.5 shrink-0" /> .env dosyasina degerleri yapistir.</li>
+                                                        </ul>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <a href="https://developers.facebook.com/apps/" target="_blank" rel="noreferrer" className="rounded-xl border border-gray-200 dark:border-white/10 p-3 bg-gray-50 dark:bg-dark-900 hover:bg-gray-100 dark:hover:bg-dark-700 transition">
+                                                            <p className="font-semibold text-gray-900 dark:text-white inline-flex items-center gap-2"><ExternalLink size={14} /> Meta Developers</p>
+                                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">App / Use Case / Explorer</p>
+                                                        </a>
+                                                        <a href="https://business.facebook.com/settings/" target="_blank" rel="noreferrer" className="rounded-xl border border-gray-200 dark:border-white/10 p-3 bg-gray-50 dark:bg-dark-900 hover:bg-gray-100 dark:hover:bg-dark-700 transition">
+                                                            <p className="font-semibold text-gray-900 dark:text-white inline-flex items-center gap-2"><Globe size={14} /> Business Settings</p>
+                                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Page / IG / App baglantilari</p>
+                                                        </a>
+                                                    </div>
+
+                                                    <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-dark-900 p-4 space-y-3">
+                                                        <p className="font-semibold text-gray-900 dark:text-white">Graph alanlarini UI'dan kaydet</p>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                            <input className="w-full bg-white dark:bg-dark-800 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-sm text-gray-900 dark:text-white" placeholder="FB_APP_ID" value={graphConfig.fb_app_id} onChange={(e) => setGraphConfig(prev => ({ ...prev, fb_app_id: e.target.value }))} />
+                                                            <input className="w-full bg-white dark:bg-dark-800 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-sm text-gray-900 dark:text-white" placeholder="FB_APP_SECRET" value={graphConfig.fb_app_secret} onChange={(e) => setGraphConfig(prev => ({ ...prev, fb_app_secret: e.target.value }))} />
+                                                            <input className="w-full bg-white dark:bg-dark-800 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-sm text-gray-900 dark:text-white" placeholder="FB_PAGE_ID" value={graphConfig.fb_page_id} onChange={(e) => setGraphConfig(prev => ({ ...prev, fb_page_id: e.target.value }))} />
+                                                            <input className="w-full bg-white dark:bg-dark-800 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-sm text-gray-900 dark:text-white" placeholder="IG_USER_ID" value={graphConfig.ig_user_id} onChange={(e) => setGraphConfig(prev => ({ ...prev, ig_user_id: e.target.value }))} />
+                                                        </div>
+                                                        <input className="w-full bg-white dark:bg-dark-800 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-sm text-gray-900 dark:text-white" placeholder="FB_ACCESS_TOKEN" value={graphConfig.fb_access_token} onChange={(e) => setGraphConfig(prev => ({ ...prev, fb_access_token: e.target.value }))} />
+                                                        <input className="w-full bg-white dark:bg-dark-800 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-sm text-gray-900 dark:text-white" placeholder="PUBLIC_BASE_URL (https://....trycloudflare.com)" value={graphConfig.public_base_url} onChange={(e) => setGraphConfig(prev => ({ ...prev, public_base_url: e.target.value }))} />
+                                                        <div className="flex gap-2">
+                                                            <button onClick={saveGraphConfig} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm">UI'dan .env Kaydet</button>
+                                                            <button
+                                                                onClick={async () => {
+                                                                    await refreshGraphStatus();
+                                                                    await refreshGraphTokenStatus();
+                                                                }}
+                                                                className="px-4 py-2 rounded-lg border border-gray-300 dark:border-white/20 text-gray-700 dark:text-gray-200 text-sm"
+                                                            >
+                                                                Durumu Yenile
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="rounded-2xl border border-gray-200 dark:border-white/10 bg-gray-50 dark:bg-dark-900 p-4">
+                                                        <div className="flex items-center justify-between gap-3 mb-3">
+                                                            <p className="font-semibold text-gray-900 dark:text-white inline-flex items-center gap-2"><Link2 size={16} /> .env sablonu</p>
+                                                            <button
+                                                                onClick={copyGraphEnvTemplate}
+                                                                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-300 dark:border-white/20 hover:bg-gray-200 dark:hover:bg-dark-700 transition inline-flex items-center gap-1 text-gray-700 dark:text-gray-200"
+                                                            >
+                                                                <Copy size={13} /> {envCopied ? 'Kopyalandi' : 'Kopyala'}
+                                                            </button>
+                                                        </div>
+                                                        <pre className="text-xs leading-5 text-gray-700 dark:text-gray-300 bg-white dark:bg-black/30 border border-gray-200 dark:border-white/10 rounded-xl p-3 overflow-x-auto">{graphEnvTemplate}</pre>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {instaAuthTab === 'legacy' && (
+                                                <div className="space-y-3 text-left">
+                                                    <p className="text-sm dark:text-gray-400 text-gray-500">
+                                                        Sifre projeye yazilmaz. Windows Credential Manager'a kaydedilir.
+                                                    </p>
+                                                    <input
+                                                        className="w-full bg-gray-50 dark:bg-dark-900/50 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-gray-900 dark:text-white focus:border-emerald-500 focus:outline-none"
+                                                        placeholder="Kullanici adi"
+                                                        value={instaUser}
+                                                        onChange={(e) => setInstaUser(e.target.value)}
+                                                    />
+                                                    <input
+                                                        type="password"
+                                                        className="w-full bg-gray-50 dark:bg-dark-900/50 border border-gray-300 dark:border-white/10 rounded-xl p-3 text-gray-900 dark:text-white focus:border-emerald-500 focus:outline-none"
+                                                        placeholder="Sifre"
+                                                        value={instaPass}
+                                                        onChange={(e) => setInstaPass(e.target.value)}
+                                                    />
+                                                    <div className="flex gap-3 pt-2">
+                                                        <button
+                                                            onClick={async () => {
+                                                                if (!instaUser.trim() || !instaPass) return;
+                                                                const res = await api.saveInstagramCredentials(instaUser.trim(), instaPass);
+                                                                if (res?.success) {
+                                                                    await api.resetInstagramSession();
+                                                                    closeInstaModal();
+                                                                    alert('Kaydedildi. Oturum sifirlandi. Bir sonraki upload taze login ile yapilacak.');
+                                                                } else {
+                                                                    alert('Hata: ' + (res?.error || 'Kaydedilemedi'));
+                                                                }
+                                                            }}
+                                                            className="flex-1 py-3 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors"
+                                                        >
+                                                            Kaydet
+                                                        </button>
+                                                        <button
+                                                            onClick={async () => {
+                                                                const ok = window.confirm("Instagram oturum dosyasi (insta_session.json) sifirlansin mi?");
+                                                                if (!ok) return;
+                                                                const res = await api.resetInstagramSession();
+                                                                alert(res?.success ? 'Oturum sifirlandi.' : 'Sifirlanamadi.');
+                                                            }}
+                                                            className="px-4 py-3 rounded-xl border border-gray-300 dark:border-white/10 bg-gray-100 dark:bg-dark-900 hover:bg-gray-200 dark:hover:bg-dark-800 transition-colors text-gray-800 dark:text-white"
+                                                        >
+                                                            Oturumu Sifirla
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 )}
+
 
                                 {studioStep === 'generating' && (
                                     <div className="text-center space-y-4">

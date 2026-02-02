@@ -5,6 +5,8 @@ from core.agents.base import BaseAgent
 from core.llm import LLMService
 from core.news_fetcher import RSS_SOURCES
 from core.agents.base import CancelledError
+from core.news_memory import get_used_title_set, normalize_title, prune_expired
+from core.config import USED_NEWS_TTL_DAYS
 
 class NewsAgent(BaseAgent):
     def __init__(self, llm_service: LLMService, rss_urls: List[str] = None):
@@ -36,6 +38,10 @@ class NewsAgent(BaseAgent):
             "deadly", "killed", "murder", "shoot", "shooting",
             "bomb", "attack", "terror", "war",
         ]
+        ttl_seconds = USED_NEWS_TTL_DAYS * 24 * 60 * 60
+        prune_expired(ttl_seconds)
+        used_set = get_used_title_set(ttl_seconds)
+
         for url in self.rss_urls:
             self._cancel_guard("fetch_news")
             try:
@@ -53,6 +59,8 @@ class NewsAgent(BaseAgent):
                     title = getattr(entry, "title", "")
                     title_l = title.lower()
                     if any(k in title_l for k in blocked_keywords):
+                        continue
+                    if normalize_title(title) in used_set:
                         continue
                     items.append({
                         "title": title,

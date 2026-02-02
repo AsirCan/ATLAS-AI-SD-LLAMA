@@ -39,6 +39,11 @@ PIPER_EXE_PATH = os.path.join(PIPER_TOOLS_DIR, "piper.exe")
 PIPER_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 PIPER_TR_MODEL_NAME = "tr_TR-fahrettin-medium.onnx"
 PIPER_TR_CONFIG_NAME = "tr_TR-fahrettin-medium.onnx.json"
+
+# Cloudflared (for Graph API public URL tunnel)
+CLOUDFLARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "cloudflared")
+CLOUDFLARED_EXE = os.path.join(CLOUDFLARED_DIR, "cloudflared.exe")
+CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
 def _hf_list_files(repo):
     """Return a list of filenames in a Hugging Face repo via the API."""
     import requests  # noqa: E402
@@ -373,6 +378,47 @@ def install_frontend_deps():
         print(f"{RED}❌ Frontend bağımlılık kurulumu hatası: {e}{RESET}")
         sys.exit(1)
 
+
+
+def install_cloudflared_for_graph():
+    """Install cloudflared helper to make Graph API uploads easier on first run."""
+    if os.name != "nt":
+        return
+
+    print(f"\n{YELLOW}Cloudflared kontrol ediliyor...{RESET}")
+
+    if os.path.exists(CLOUDFLARED_EXE):
+        print(f"{GREEN}Cloudflared mevcut: {CLOUDFLARED_EXE}{RESET}")
+        return
+
+    # Try winget installation first
+    winget = which("winget")
+    if winget:
+        try:
+            print(f"{YELLOW}winget ile cloudflared kuruluyor...{RESET}")
+            subprocess.run([winget, "install", "--id", "Cloudflare.cloudflared", "-e", "--silent"], check=False)
+        except Exception:
+            pass
+
+        if which("cloudflared") or which("cloudflared.exe"):
+            print(f"{GREEN}Cloudflared winget ile kuruldu.{RESET}")
+            return
+
+    # Fallback to local binary download
+    try:
+        import requests  # noqa: E402
+
+        os.makedirs(CLOUDFLARED_DIR, exist_ok=True)
+        print(f"{YELLOW}cloudflared.exe indiriliyor...{RESET}")
+        r = requests.get(CLOUDFLARED_URL, timeout=120)
+        r.raise_for_status()
+        with open(CLOUDFLARED_EXE, "wb") as f:
+            f.write(r.content)
+        print(f"{GREEN}Cloudflared indirildi: {CLOUDFLARED_EXE}{RESET}")
+    except Exception as e:
+        print(f"{RED}Cloudflared otomatik kurulamadi: {e}{RESET}")
+        print(f"{YELLOW}Not: Gerekirse sonradan 'python tools/setup_tunnel.py' tekrar calistirabilirsiniz.{RESET}")
+
 def install_forge():
     """Forge'u C:\Forge klasörüne indirir."""
     print(f"\n{YELLOW}🏗️ Stable Diffusion (Forge) Kurulumu Kontrol Ediliyor...{RESET}")
@@ -491,6 +537,9 @@ if __name__ == "__main__":
 
     # 6. Frontend bağımlılıkları
     install_frontend_deps()
+
+    # 7. Cloudflared (Graph API tunnel helper)
+    install_cloudflared_for_graph()
 
     print(f"\n{GREEN}🎉 KURULUM TAMAMLANDI!{RESET}")
     print(f"{YELLOW}Başlatma (önerilen):{RESET} python run.py")

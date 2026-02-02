@@ -76,7 +76,7 @@ def start_stable_diffusion():
         stderr=subprocess.DEVNULL
     )
 
-def ensure_sd_running(wait_seconds=20, log_callback=print, cancel_checker=None):
+def ensure_sd_running(wait_seconds=20, log_callback=print, cancel_checker=None, max_wait_seconds=180):
     """
     SD çalışmıyorsa açar. Açtıktan sonra port gelene kadar bekler.
     """
@@ -86,9 +86,8 @@ def ensure_sd_running(wait_seconds=20, log_callback=print, cancel_checker=None):
 
     start_stable_diffusion()
 
-    # SD'nin ayağa kalkmasını bekle
-    # SD'nin ayağa kalkmasını bekle (Sınırsız döngü)
-    log_callback(f"⏳ Stable Diffusion açılıyor... (Hazır olana kadar bekleniyor)")
+    # SD'nin ayağa kalkmasını bekle (sonsuz bekleme yok)
+    log_callback(f"⏳ Stable Diffusion açılıyor... (en fazla {max_wait_seconds}s beklenecek)")
     
     start_time = time.time()
     last_print_time = start_time
@@ -112,8 +111,15 @@ def ensure_sd_running(wait_seconds=20, log_callback=print, cancel_checker=None):
             elapsed = int(current_time - start_time)
             log_callback(f"⏳ Stable Diffusion bekleniyor... ({elapsed} saniye geçti)")
             last_print_time = current_time
+
+        # Timeout guard: uzun süre takılınca backend'i kilitleme
+        if current_time - start_time >= max_wait_seconds:
+            log_callback(
+                f"{YELLOW}⚠️ Stable Diffusion {max_wait_seconds}s içinde hazır olmadı. "
+                f"Backend devam ediyor; SD işlemlerinde hata alırsan Forge'u manuel aç.{RESET}"
+            )
+            return False
             
         time.sleep(2)
 
-    # Bu satıra asla gelmez çünkü while True var
-    return True
+    return False
