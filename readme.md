@@ -192,26 +192,32 @@ python run.py --agent --live
 
 ```mermaid
 graph TD
-    A["UI: Başlat"] --> B["Backend: Service Check"]
-    B -->|OK| C["Orchestrator: Pipeline Başlat"]
-    
+    A["UI: Baslat"] --> B["Backend: Service Check"]
+    B -->|OK| C["Orchestrator: Pipeline Baslat"]
+
     C --> D["News Agent"]
-    D -->|"Haberleri Çek & Puanla"| E["Risk Agent"]
-    
+    D -->|"Haberleri cek + puanla"| E["Risk Agent"]
     E -->|"Riskli?"| F{"Onay"}
-    F -- Evet --> G["Log & Skip"]
-    F -- Hayır --> H["Visual Director Agent"]
-    
-    H -->|"Prompt Üret"| I["Stable Diffusion (Forge)"]
-    I -->|"Görsel Çizildi"| J["Caption Agent"]
-    
-    J -->|"Metin Yazıldı"| K["Scheduler Agent"]
+    F -- Evet --> G["Log + Skip"]
+    F -- Hayir --> H["Visual Director Agent"]
+
+    H -->|"Prompt uret"| I["Stable Diffusion (Forge)"]
+    I -->|"Gorsel cizildi"| J["Caption Agent"]
+    J -->|"Metin hazir"| K["Scheduler Agent"]
     K -->|"Zamanlama"| L{"Mod"}
-    
-    L -- "Dry Run" --> M["Log Çıktısı"]
-    L -- "Live" --> N["Instagram Upload"]
-    
-    N --> O["UI: Tamamlandı"]
+
+    L -- Dry Run --> M["Sadece log cikisi"]
+    L -- Live --> N{"Upload Yolu"}
+
+    N -->|Graph config dolu| P["Token kontrolu"]
+    P -->|Gecerli| Q["Gorsel -> JPG normalize"]
+    Q --> R["PUBLIC_BASE_URL ile media URL"]
+    R --> S["Graph: /media -> /media_publish"]
+    S --> T["UI: Tamamlandi"]
+
+    P -->|Gecersiz| U["UI: Token yenile uyarisi"]
+    N -->|Graph eksik| V["Legacy instagrapi fallback"]
+    V --> T
 ```
 
 ### 0) UI/Backend koordinasyonu
@@ -244,3 +250,26 @@ Orchestrator aşağıdaki sırayla ilerler (her adım loglanır ve UI’ye yans�
 - Başarılı: `status=done`, `percent=100`
 - İptal: `status=cancelled` (cooperative)
 - Hata: `status=error` + `error` alanı
+
+
+## Instagram Upload Algoritmasi
+
+Bu repo artik varsayilan olarak **Graph API + auto tunnel** akisina gore calisir.
+
+1. `python run.py` calisir.
+2. Graph alanlari doluysa (`FB_*`, `IG_USER_ID`) tunnel otomatik baslar (`tools/setup_tunnel.py`).
+3. Tunnel URL `.env` icine `PUBLIC_BASE_URL` olarak yazilir.
+4. Studio > Instagram Baglanti Merkezi uzerinden alanlar kaydedilir, token durumu kontrol edilir.
+5. Upload sirasinda backend:
+   - token gecerliligini kontrol eder,
+   - gorseli Graph icin JPG'e normalize eder,
+   - local dosya yolunu public URL'e cevirir (`PUBLIC_BASE_URL/images/...`),
+   - `/{IG_USER_ID}/media` ve `/{IG_USER_ID}/media_publish` adimlarini cagirir.
+6. Tunnel URL fetch sorunu olursa fallback olarak gecici public host denemesi yapilir.
+7. Graph alanlari eksikse legacy `instagrapi` yedek yol olarak kullanilir.
+
+## Yeni Endpointler (Guncel)
+
+- `POST /api/instagram/graph-config`
+- `GET /api/instagram/graph-config`
+- `GET /api/instagram/token-status`
