@@ -222,6 +222,27 @@ export const api = {
         }
     },
 
+    // --- ImgBB Config ---
+    getImgBBConfig: async () => {
+        try {
+            const response = await client.get('/imgbb/config');
+            return response.data;
+        } catch (error) {
+            console.error('ImgBB Config Error:', error);
+            return { success: false, error: error.toString() };
+        }
+    },
+
+    saveImgBBConfig: async (apiKey) => {
+        try {
+            const response = await client.post('/imgbb/config', { imgbb_api_key: apiKey });
+            return response.data;
+        } catch (error) {
+            console.error('ImgBB Save Error:', error);
+            return { success: false, error: error.toString() };
+        }
+    },
+
     cancelAgent: async () => {
         try {
             const response = await client.post('/agent/cancel');

@@ -54,6 +54,8 @@ function App() {
         expires_in_seconds: null,
         message: '',
     });
+    const [imgbbApiKey, setImgbbApiKey] = useState('');
+    const [imgbbConfigured, setImgbbConfigured] = useState(false);
 
     const isAgentRunning = agentStatus === 'running';
     const setAppModeSafe = (nextMode) => {
@@ -149,6 +151,7 @@ function App() {
         if (showInstaLogin) {
             refreshGraphStatus();
             refreshGraphTokenStatus();
+            refreshImgBBConfig();
         }
     }, [showInstaLogin]);
 
@@ -247,6 +250,7 @@ function App() {
         'IG_USER_ID=',
         'FB_ACCESS_TOKEN=',
         'PUBLIC_BASE_URL=',
+        'IMGBB_API_KEY=',
         'IG_GRAPH_VERSION=v24.0',
     ].join('\n');
 
@@ -304,6 +308,15 @@ function App() {
         });
     };
 
+    const refreshImgBBConfig = async () => {
+        const res = await api.getImgBBConfig();
+        if (res?.success) {
+            const key = (res.imgbb_api_key || '').trim();
+            setImgbbApiKey(key);
+            setImgbbConfigured(!!key);
+        }
+    };
+
     const formatExpiresIn = (seconds) => {
         if (typeof seconds !== 'number') return 'Bilinmiyor';
         if (seconds <= 0) return 'Doldu';
@@ -331,6 +344,16 @@ function App() {
         }
     };
 
+    const saveImgBBConfig = async () => {
+        const res = await api.saveImgBBConfig(imgbbApiKey.trim());
+        if (res?.success) {
+            await refreshImgBBConfig();
+            alert('ImgBB API key .env dosyasina kaydedildi.');
+        } else {
+            alert('ImgBB ayari kaydedilemedi: ' + (res?.error || 'Bilinmeyen hata'));
+        }
+    };
+
     const formatInstagramUploadError = (rawMessage) => {
         const msg = String(rawMessage || '');
         const lower = msg.toLowerCase();
@@ -342,6 +365,7 @@ function App() {
                 'Öneri:',
                 '- Tunnel terminalini açık tut (cloudflared kapanmasın).',
                 '- PUBLIC_BASE_URL güncel olsun.',
+                '- Baglanti Merkezi > ImgBB Fallback alanina API key gir ve kaydet.',
                 '- Tekrar dene (sistem fallback ile tekrar dener).',
             ].join('\n');
         }
@@ -817,6 +841,16 @@ function App() {
 
                                             {instaAuthTab === 'graph' && (
                                                 <div className="space-y-4 text-left">
+                                                    <div className="rounded-2xl border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/10 p-4">
+                                                        <p className="font-semibold text-indigo-700 dark:text-indigo-300">Hızlı Kullanım Akışı</p>
+                                                        <div className="mt-2 space-y-1 text-xs text-indigo-900 dark:text-indigo-100">
+                                                            <p><b>1)</b> Bu pencereden Graph alanlarini doldur ve <b>UI'dan .env Kaydet</b> de.</p>
+                                                            <p><b>2)</b> Cloudflare tuneli ulasilamazsa diye <b>ImgBB Fallback</b> alanina API key gir.</p>
+                                                            <p><b>3)</b> Studio ekraninda icerik uret ve <b>Instagram'a Yukle</b> butonuna bas.</p>
+                                                            <p><b>4)</b> Hata olursa once <b>Durumu Yenile</b> ile durumlari kontrol et.</p>
+                                                        </div>
+                                                    </div>
+
                                                     <div className="rounded-xl border border-gray-200 dark:border-white/10 px-4 py-3 bg-white/60 dark:bg-dark-900/60 flex items-center justify-between">
                                                         <span className="text-sm text-gray-700 dark:text-gray-300">Kurulum durumu</span>
                                                         <span className={`text-xs font-bold px-2 py-1 rounded-md ${graphStatus.graph_ready ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'}`}>
@@ -889,11 +923,35 @@ function App() {
                                                                 onClick={async () => {
                                                                     await refreshGraphStatus();
                                                                     await refreshGraphTokenStatus();
+                                                                    await refreshImgBBConfig();
                                                                 }}
                                                                 className="px-4 py-2 rounded-lg border border-gray-300 dark:border-white/20 text-gray-700 dark:text-gray-200 text-sm"
                                                             >
                                                                 Durumu Yenile
                                                             </button>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="rounded-2xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 p-4 space-y-3">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div>
+                                                                <p className="font-semibold text-emerald-700 dark:text-emerald-300">ImgBB Fallback (Cloudflare yedegi)</p>
+                                                                <p className="text-xs text-emerald-900/80 dark:text-emerald-100/90 mt-1">Tunnel linki fail olursa gorsel gecici olarak ImgBB'ye yuklenir.</p>
+                                                            </div>
+                                                            <span className={`text-xs font-bold px-2 py-1 rounded-md ${imgbbConfigured ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300'}`}>
+                                                                {imgbbConfigured ? 'Hazir' : 'Eksik'}
+                                                            </span>
+                                                        </div>
+                                                        <input
+                                                            type="password"
+                                                            className="w-full bg-white dark:bg-dark-800 border border-emerald-300/60 dark:border-emerald-400/30 rounded-xl p-3 text-sm text-gray-900 dark:text-white"
+                                                            placeholder="IMGBB_API_KEY"
+                                                            value={imgbbApiKey}
+                                                            onChange={(e) => setImgbbApiKey(e.target.value)}
+                                                        />
+                                                        <div className="flex gap-2">
+                                                            <button onClick={saveImgBBConfig} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm">ImgBB anahtarini .env kaydet</button>
+                                                            <button onClick={refreshImgBBConfig} className="px-4 py-2 rounded-lg border border-emerald-300/70 dark:border-emerald-400/30 text-emerald-700 dark:text-emerald-300 text-sm">Yenile</button>
                                                         </div>
                                                     </div>
 

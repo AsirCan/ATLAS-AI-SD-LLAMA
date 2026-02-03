@@ -160,11 +160,13 @@ class InstaGraphConfigRequest(BaseModel):
     fb_access_token: str = ""
     public_base_url: str = ""
     ig_graph_version: str = "v24.0"
-    
+
+class ImgBBConfigRequest(BaseModel):
+    imgbb_api_key: str = ""
+
 @app.get("/")
 def read_root():
     return {"status": "online", "message": "Ses Asistanı Backend Running"}
-
 
 @app.get("/robots.txt")
 def robots_txt():
@@ -692,6 +694,29 @@ async def instagram_token_status_endpoint():
     """Returns Graph access token validity and expiration status."""
     try:
         return _graph_token_status_from_env()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/imgbb/config")
+async def imgbb_config_post_endpoint(req: ImgBBConfigRequest):
+    """Saves ImgBB API Key to .env"""
+    try:
+        _upsert_env_values({
+            "IMGBB_API_KEY": req.imgbb_api_key
+        })
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/imgbb/config")
+async def imgbb_config_get_endpoint():
+    """Returns current ImgBB config"""
+    try:
+        values = _read_env_values()
+        return {
+            "success": True,
+            "imgbb_api_key": values.get("IMGBB_API_KEY", "")
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

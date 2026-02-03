@@ -65,6 +65,11 @@ def _cfg(name: str, default: str = "") -> str:
         return v.rstrip("/")
     return v
 
+
+def _imgbb_api_key() -> str:
+    # Keep module constant as fallback for compatibility with existing imports/tests.
+    return _cfg("IMGBB_API_KEY", IMGBB_API_KEY)
+
 def set_instagram_credentials(username: str, password: str) -> bool:
     """
     Stores Instagram credentials in OS credential store (Windows Credential Manager via keyring).
@@ -173,15 +178,35 @@ def _graph_post(endpoint: str, payload: dict) -> dict:
     url = f"https://graph.facebook.com/{ig_graph_version}/{endpoint.lstrip('/')}"
     data = dict(payload)
     data["access_token"] = fb_access_token
-    r = requests.post(url, data=data, timeout=60)
-    try:
-        body = r.json()
-    except Exception:
-        body = {"raw": r.text}
+    data["access_token"] = fb_access_token
+    
+    # Retry mechanism for timeouts
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            r = requests.post(url, data=data, timeout=120) # Increased timeout to 120s
+            try:
+                body = r.json()
+            except Exception:
+                body = {"raw": r.text}
 
-    if not r.ok or "error" in body:
-        raise GraphAPIError(body)
-    return body
+            if not r.ok or "error" in body:
+                # If it's a timeout error from FB side, maybe retry? 
+                # For now, just raise if it's an API error
+                raise GraphAPIError(body)
+            return body
+
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            print(f"{YELLOW}⚠️ Graph API Timeout/Connection ({attempt+1}/{max_retries}): {e}{RESET}")
+            if attempt == max_retries - 1:
+                raise GraphAPIError({"error": {"message": f"Timeout after {max_retries} attempts", "details": str(e)}})
+            time.sleep(3)
+        except GraphAPIError:
+            raise
+        except Exception as e:
+             raise GraphAPIError({"error": {"message": f"Unexpected error: {str(e)}"}})
+    
+    return {} # Should not reach here
 
 
 def _discover_ig_user_id() -> str:
@@ -263,8 +288,32 @@ def _upload_temp_public_image(local_image_path: str) -> str:
     if not p.exists():
         raise RuntimeError(f"Fallback upload file not found: {local_image_path}")
 
+    # 0) ImgBB (Varsa en garantisi)
+    imgbb_key = _imgbb_api_key()
+    if imgbb_key:
+        try:
+            print(f"{YELLOW}☁️ ImgBB'ye yükleniyor...{RESET}")
+            with p.open("rb") as f:
+                r = requests.post(
+                    "https://api.imgbb.com/1/upload",
+                    data={"key": imgbb_key, "expiration": 600}, # 10dk ömürlü link (Graph API çekene kadar yeter)
+                    files={"image": f},
+                    timeout=60
+                )
+            if r.ok:
+                data = r.json().get("data", {})
+                url = data.get("url")
+                if url:
+                    print(f"{GREEN}✅ ImgBB URL: {url}{RESET}")
+                    return url
+            else:
+                print(f"{YELLOW}⚠️ ImgBB Hata: {r.text}{RESET}")
+        except Exception as e:
+            print(f"{YELLOW}⚠️ ImgBB Exception: {e}{RESET}")
+
     # 1) 0x0.st (simple, no key)
     try:
+        print(f"{YELLOW}☁️ 0x0.st deneniyor...{RESET}")
         with p.open("rb") as f:
             r = requests.post(
                 "https://0x0.st",
@@ -274,12 +323,17 @@ def _upload_temp_public_image(local_image_path: str) -> str:
         if r.ok:
             url = (r.text or "").strip()
             if url.startswith("http://") or url.startswith("https://"):
+                print(f"{GREEN}✅ 0x0.st URL: {url}{RESET}")
                 return url
-    except Exception:
+        else:
+            print(f"{YELLOW}⚠️ 0x0.st Hata Kod: {r.status_code}, Body: {r.text[:200]}{RESET}")
+    except Exception as e:
+        print(f"{YELLOW}⚠️ 0x0.st Exception: {e}{RESET}")
         pass
 
     # 2) catbox.moe fallback
     try:
+        print(f"{YELLOW}☁️ catbox.moe deneniyor...{RESET}")
         with p.open("rb") as f:
             r = requests.post(
                 "https://catbox.moe/user/api.php",
@@ -290,11 +344,15 @@ def _upload_temp_public_image(local_image_path: str) -> str:
         if r.ok:
             url = (r.text or "").strip()
             if url.startswith("http://") or url.startswith("https://"):
+                print(f"{GREEN}✅ catbox.moe URL: {url}{RESET}")
                 return url
-    except Exception:
+        else:
+            print(f"{YELLOW}⚠️ catbox.moe Hata Kod: {r.status_code}, Body: {r.text[:200]}{RESET}")
+    except Exception as e:
+        print(f"{YELLOW}⚠️ catbox.moe Exception: {e}{RESET}")
         pass
 
-    raise RuntimeError("Gorsel icin gecici public URL olusturulamadi.")
+    raise RuntimeError("Gorsel icin gecici public URL olusturulamadi (Tum servisler denendi).")
 
 def _publish_single_with_graph(image_path_or_url: str, caption: str):
     ig_user_id = _cfg("IG_USER_ID")

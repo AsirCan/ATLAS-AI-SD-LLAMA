@@ -124,6 +124,7 @@ FB_PAGE_ID=
 IG_USER_ID=
 FB_ACCESS_TOKEN=
 PUBLIC_BASE_URL=
+IMGBB_API_KEY= # opsiyonel ama onerilir
 IG_GRAPH_VERSION=v24.0
 ```
 
@@ -140,7 +141,7 @@ python install.py
 ```
 
 2. `.env.example` dosyasını `.env` yap ve Graph API alanlarını doldur:
-   - `FB_APP_ID`, `FB_APP_SECRET`, `FB_PAGE_ID`, `IG_USER_ID`, `FB_ACCESS_TOKEN`, `PUBLIC_BASE_URL`
+   - `FB_APP_ID`, `FB_APP_SECRET`, `FB_PAGE_ID`, `IG_USER_ID`, `FB_ACCESS_TOKEN`, `PUBLIC_BASE_URL` (opsiyonel: `IMGBB_API_KEY`)
 
 ## Çalıştırma
 
@@ -265,7 +266,7 @@ Bu repo artik varsayilan olarak **Graph API + auto tunnel** akisina gore calisir
    - gorseli Graph icin JPG'e normalize eder,
    - local dosya yolunu public URL'e cevirir (`PUBLIC_BASE_URL/images/...`),
    - `/{IG_USER_ID}/media` ve `/{IG_USER_ID}/media_publish` adimlarini cagirir.
-6. Tunnel URL fetch sorunu olursa fallback olarak gecici public host denemesi yapilir.
+6. Tunnel URL fetch sorunu olursa fallback olarak gecici public host denemesi yapilir (IMGBB_API_KEY varsa once ImgBB kullanilir).
 7. Graph alanlari eksikse legacy `instagrapi` yedek yol olarak kullanilir.
 
 ## Yeni Endpointler (Guncel)
