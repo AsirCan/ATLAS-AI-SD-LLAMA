@@ -67,3 +67,6 @@ models/
 insta_session.json
 
 tools/
+
+# Data
+*.db
