@@ -68,7 +68,7 @@ const AudioVisualizer = ({ stream }) => {
     }, [stream]);
 
     return (
-        <div className="w-full h-24 flex items-center justify-center p-2 rounded-xl bg-black/20 backdrop-blur-sm border border-white/5">
+        <div className="w-full h-24 flex items-center justify-center p-2 rounded-xl dark:bg-black/20 bg-gray-100/50 backdrop-blur-sm border dark:border-white/5 border-gray-200">
             <canvas
                 ref={canvasRef}
                 width={300}

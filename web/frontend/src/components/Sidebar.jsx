@@ -10,7 +10,7 @@ const Sidebar = ({ currentMode, setMode, onOpenGallery, isGalleryOpen, lockNavig
     ];
 
     return (
-        <div className="h-full w-20 md:w-24 dark:bg-dark-900/80 bg-white/80 backdrop-blur-xl dark:border-r border-r border-white/5 border-gray-200 flex flex-col items-center py-8 z-50 transition-all duration-300">
+        <div className="h-full w-20 md:w-24 dark:bg-dark-900/80 bg-white/80 backdrop-blur-xl border-r dark:border-white/5 border-gray-200 flex flex-col items-center py-8 z-50 transition-all duration-300">
             {/* Logo Removed (Moved to Header) */}
 
             {/* Navigation */}

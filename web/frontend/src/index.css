@@ -8,7 +8,7 @@
 }
 
 body {
-  @apply bg-dark-900 text-white antialiased overflow-hidden;
+  @apply dark:bg-dark-900 bg-gray-50 dark:text-white text-gray-900 antialiased overflow-hidden;
 }
 
 ::selection {
@@ -66,6 +66,12 @@ body {
   z-index: 10;
 }
 
+:root:not(.dark) .glass {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.08);
+}
+
 .glass:hover {
   box-shadow:
     0 8px 32px 0 rgba(0, 0, 0, 0.5),
@@ -81,6 +87,12 @@ body {
   border-radius: 16px;
   color: white;
   transition: all 0.3s ease;
+}
+
+:root:not(.dark) .glass-input {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #111827;
 }
 
 .glass-input:focus {
@@ -129,6 +141,9 @@ body {
 /* --- TYPOGRAPHY & EXTRA --- */
 h1 {
   letter-spacing: -0.02em;
+}
+
+.dark h1 {
   text-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
 }
 
