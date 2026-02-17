@@ -1,12 +1,23 @@
-from typing import List, Dict, Any
+import re
+from typing import List, Dict, Any, Optional
 import feedparser
-from core.state import PipelineState
+from core.pipeline.state import PipelineState
 from core.agents.base import BaseAgent
-from core.llm import LLMService
-from core.news_fetcher import RSS_SOURCES
+from core.clients.llm import LLMService
+from core.content.news_fetcher import RSS_SOURCES
 from core.agents.base import CancelledError
-from core.news_memory import get_used_title_set, normalize_title, prune_expired
-from core.config import USED_NEWS_TTL_DAYS
+from core.content.news_memory import get_used_title_set, normalize_title, prune_expired
+from core.runtime.config import USED_NEWS_TTL_DAYS
+
+
+def _find_keyword_hit(text: str, keywords: List[str]) -> Optional[str]:
+    haystack = str(text or "").lower()
+    for kw in keywords:
+        pattern = rf"\b{re.escape(str(kw).lower())}\b"
+        if re.search(pattern, haystack):
+            return kw
+    return None
+
 
 class NewsAgent(BaseAgent):
     def __init__(self, llm_service: LLMService, rss_urls: List[str] = None):
@@ -57,8 +68,7 @@ class NewsAgent(BaseAgent):
                 for entry in feed.entries[:5]: # Take top 5 from each feed to save processing
                     self._cancel_guard("fetch_news_entries")
                     title = getattr(entry, "title", "")
-                    title_l = title.lower()
-                    if any(k in title_l for k in blocked_keywords):
+                    if _find_keyword_hit(title, blocked_keywords):
                         continue
                     if normalize_title(title) in used_set:
                         continue
@@ -118,3 +128,4 @@ class NewsAgent(BaseAgent):
                 self.log(f"Skipping item '{item['title'][:20]}...' due to scoring error: {e}")
         
         return scored_items
+

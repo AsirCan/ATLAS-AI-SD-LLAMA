@@ -1,13 +1,15 @@
-import requests
+﻿import json
 import subprocess
+import threading
 import time
-import json
-from typing import Optional, Dict, Any, List, Sequence, Literal
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
-from core.config import RED, YELLOW, RESET
+import requests
+
+from core.runtime.config import RED, RESET, YELLOW
 
 # ==================================================
-# Ollama Ayarları
+# Ollama Settings
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "llama3.1:8b"
 # ==================================================
@@ -20,10 +22,13 @@ SYSTEM_PROMPT = (
     "Bilmiyorsan açıkça söyle, uydurma."
 )
 
+
 def _clean_llm_text(text: str) -> str:
     return text.replace("```json", "").replace("```", "").strip()
 
+
 _DEFAULT_LLM_SERVICE = None
+
 
 def get_llm_service():
     global _DEFAULT_LLM_SERVICE
@@ -31,10 +36,11 @@ def get_llm_service():
         _DEFAULT_LLM_SERVICE = LLMService()
     return _DEFAULT_LLM_SERVICE
 
+
 def llm_answer(msg: str, system_msg: str = None) -> str:
     # 3 kere deneme hakkı veriyoruz
     max_retries = 3
-    
+
     # Eğer özel bir system prompt gelmediyse varsayılanı kullan
     final_system_prompt = system_msg if system_msg else SYSTEM_PROMPT
 
@@ -45,13 +51,15 @@ def llm_answer(msg: str, system_msg: str = None) -> str:
 
         except Exception as e:
             print(RED + f"[OLLAMA HATASI - Deneme {i+1}/{max_retries}] {e}")
+            if "Cancelled during LLM request" in str(e):
+                return "İstek iptal edildi."
             if "500" in str(e) or "Connection refused" in str(e):
                 print(f"{YELLOW}⏳ VRAM'in boşalması bekleniyor (5 sn)...{RESET}")
                 time.sleep(5)  # 5 saniye bekle ve tekrar dene
             else:
                 # Başka bir hataysa (örn: internet yok) bekleme, direkt çık
                 break
-    
+
     return "Şu an cevap veremiyorum (Teknik arıza)."
 
 
@@ -66,7 +74,7 @@ def ollama_warmup():
             ["ollama", "run", MODEL],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
         )
         time.sleep(2.5)
         print("✅ Ollama warm-up tamamlandı.")
@@ -87,9 +95,10 @@ def unload_ollama():
     except Exception as e:
         print(f"⚠️ VRAM temizleme hatası: {e}")
 
+
 def visual_prompt_generator(user_text: str) -> str:
     """
-    Kullanıcının girdiği (muhtemelen Türkçe) metni, 
+    Kullanıcının girdiği (muhtemelen Türkçe) metni,
     Stable Diffusion için uygun İNGİLİZCE prompt haline getirir.
     """
     system_msg = (
@@ -103,26 +112,28 @@ def visual_prompt_generator(user_text: str) -> str:
         "5. Output ONLY the prompt string.\n"
         "6. Example: 'sarı araba' -> 'A hyper-realistic 8k shot of a yellow sports car drifting on a rainy asphalt road, reflection of neon city lights, cinematic lighting, dramatic atmosphere, shot on 35mm film, award-winning photography.'"
     )
-    
+
     try:
         prompt_en = get_llm_service().ask(user_text, system=system_msg, timeout=60, retries=1).strip()
-        
+
         # Temizlik
-        if ":" in prompt_en and len(prompt_en.split(":")[0]) < 20: # "Detailed prompt: ..." gibi şeyleri temizle
+        if ":" in prompt_en and len(prompt_en.split(":")[0]) < 20:  # "Detailed prompt: ..." gibi şeyleri temizle
             prompt_en = prompt_en.split(":")[-1].strip()
-            
+
         return prompt_en
-        
+
     except Exception as e:
         print(f"Prompt Generation Error: {e}")
-        # Hata olursa en azından orijinalini (veya basit çeviriyi) döndürmeye çalışalım 
+        # Hata olursa en azından orijinalini (veya basit çeviriyi) döndürmeye çalışalım
         # ama LLM yoksa yapacak bir şey yok, orijinali yolla.
         return user_text
+
 
 # ==================================================
 # UNIFIED SERVICE LAYER (For Multi-Agent System)
 # ==================================================
 MessageRole = Literal["system", "user", "assistant"]
+
 
 class LLMService:
     def __init__(self, model: str = None, host: str = "http://localhost:11434"):
@@ -130,6 +141,41 @@ class LLMService:
         self.model = model or MODEL
         self.host = host
         self.api_url = f"{host}/api/chat"
+        self.cancel_checker = None
+
+    def set_cancel_checker(self, checker):
+        self.cancel_checker = checker
+
+    def _is_cancelled(self) -> bool:
+        try:
+            return bool(self.cancel_checker and self.cancel_checker())
+        except Exception:
+            return False
+
+    def _post_with_cancel(self, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        done = threading.Event()
+
+        def _worker():
+            try:
+                response = requests.post(self.api_url, json=payload, timeout=timeout)
+                response.raise_for_status()
+                result["json"] = response.json()
+            except Exception as e:
+                result["error"] = e
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+        while not done.wait(0.2):
+            if self._is_cancelled():
+                raise Exception("Cancelled during LLM request")
+
+        if "error" in result:
+            raise result["error"]
+        return result["json"]
 
     def chat(
         self,
@@ -145,12 +191,14 @@ class LLMService:
 
         last_exc: Optional[Exception] = None
         for _ in range(retries):
+            if self._is_cancelled():
+                raise Exception("Cancelled during LLM request")
             try:
-                response = requests.post(self.api_url, json=payload, timeout=timeout)
-                response.raise_for_status()
-                result = response.json()
+                result = self._post_with_cancel(payload, timeout=timeout)
                 return result.get("message", {}).get("content", "")
-            except requests.RequestException as e:
+            except Exception as e:
+                if "Cancelled during LLM request" in str(e):
+                    raise
                 last_exc = e
                 time.sleep(2)
         raise Exception(f"Failed to chat with LLM after {retries} retries: {last_exc}")
@@ -194,6 +242,8 @@ class LLMService:
 
         last_exc: Optional[Exception] = None
         for attempt in range(retries):
+            if self._is_cancelled():
+                raise Exception("Cancelled during LLM request")
             try:
                 response_text = self.ask(
                     final_prompt,
@@ -204,6 +254,8 @@ class LLMService:
                 )
                 return json.loads(_clean_llm_text(response_text))
             except Exception as e:
+                if "Cancelled during LLM request" in str(e):
+                    raise
                 last_exc = e
                 print(f"LLM JSON parse error (Attempt {attempt+1}/{retries}): {e}")
                 time.sleep(1)

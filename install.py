@@ -1,4 +1,4 @@
-import os
+﻿import os
 import subprocess
 import sys
 import shutil
@@ -32,6 +32,41 @@ SD_MODEL_DIR = _resolve_sd_model_dir()
 SD_MODEL_REPO = "RunDiffusion/Juggernaut-XL-v9"
 SD_MODEL_FILENAME = "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
 
+
+def _resolve_forge_model_subdir(subdir_name: str):
+    candidates = [
+        os.path.join(FORGE_PATH, "models", subdir_name),
+        os.path.join(FORGE_PATH, "webui", "models", subdir_name),
+    ]
+    for p in candidates:
+        try:
+            if os.path.isdir(p):
+                return p
+        except Exception:
+            pass
+    return candidates[0]
+
+
+def _resolve_forge_extensions_dir():
+    candidates = [
+        os.path.join(FORGE_PATH, "extensions"),
+        os.path.join(FORGE_PATH, "webui", "extensions"),
+    ]
+    for p in candidates:
+        try:
+            if os.path.isdir(p):
+                return p
+        except Exception:
+            pass
+    return candidates[0]
+
+
+GFPGAN_MODEL_DIR = _resolve_forge_model_subdir("GFPGAN")
+ADETAILER_MODEL_DIR = _resolve_forge_model_subdir("adetailer")
+ESRGAN_MODEL_DIR = _resolve_forge_model_subdir("ESRGAN")
+CONTROLNET_MODEL_DIR = _resolve_forge_model_subdir("ControlNet")
+FORGE_EXTENSIONS_DIR = _resolve_forge_extensions_dir()
+
 # Piper (TTS) - Windows standalone binary (fix for espeakbridge missing)
 PIPER_WINDOWS_ZIP_URL = "https://sourceforge.net/projects/piper-tts.mirror/files/2023.11.14-2/piper_windows_amd64.zip/download"
 PIPER_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "piper")
@@ -39,6 +74,8 @@ PIPER_EXE_PATH = os.path.join(PIPER_TOOLS_DIR, "piper.exe")
 PIPER_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 PIPER_TR_MODEL_NAME = "tr_TR-fahrettin-medium.onnx"
 PIPER_TR_CONFIG_NAME = "tr_TR-fahrettin-medium.onnx.json"
+PIPER_EN_MODEL_NAME = "en_US-lessac-medium.onnx"
+PIPER_EN_CONFIG_NAME = "en_US-lessac-medium.onnx.json"
 
 # Cloudflared (for Graph API public URL tunnel)
 CLOUDFLARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "cloudflared")
@@ -114,6 +151,29 @@ def _build_piper_url_candidates():
 
     return model_urls, config_urls
 
+
+def _build_piper_en_url_candidates():
+    """Build a list of possible URLs for en_US-lessac-medium."""
+    model_urls = []
+    config_urls = []
+
+    # Legacy rhasspy path (still commonly used for Piper voices)
+    rhasspy_base = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
+    model_urls.append(
+        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+    )
+    model_urls.append(
+        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true"
+    )
+    config_urls.append(
+        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json"
+    )
+    config_urls.append(
+        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json?download=true"
+    )
+
+    return model_urls, config_urls
+
 # RENKLER
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
@@ -167,6 +227,68 @@ def _ensure_env_var_line(key: str, value: str):
     lines.append(f"{key}={value}")
     with open(env_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def _read_env_value(key: str):
+    """Read KEY=VALUE from .env if present; returns None when missing."""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return None
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == key:
+                    return v.strip()
+    except Exception:
+        return None
+    return None
+
+
+def _is_mongo_reachable(uri: str) -> bool:
+    """Best-effort MongoDB reachability check."""
+    try:
+        from pymongo import MongoClient  # noqa: E402
+
+        client = MongoClient(uri, serverSelectionTimeoutMS=1500)
+        client.admin.command("ping")
+        return True
+    except Exception:
+        return False
+
+
+def configure_news_memory_backend():
+    """
+    Auto-configure news memory backend so user doesn't need manual .env edits.
+    Priority:
+    1) Keep existing NEWS_MEMORY_BACKEND if already set
+    2) Use MongoDB when reachable
+    3) Fallback to JSON file backend
+    """
+    print(f"\n{YELLOW}News memory backend is being configured...{RESET}")
+
+    existing_backend = _read_env_value("NEWS_MEMORY_BACKEND")
+    if existing_backend:
+        print(f"{GREEN}News memory backend already set: {existing_backend}{RESET}")
+        return
+
+    mongo_uri = _read_env_value("NEWS_MEMORY_MONGO_URI") or "mongodb://localhost:27017"
+    if _is_mongo_reachable(mongo_uri):
+        _ensure_env_var_line("NEWS_MEMORY_BACKEND", "mongodb")
+        _ensure_env_var_line("NEWS_MEMORY_MONGO_URI", mongo_uri)
+        _ensure_env_var_line("NEWS_MEMORY_MONGO_DB", "atlas_ai")
+        _ensure_env_var_line("NEWS_MEMORY_MONGO_COLLECTION", "used_news")
+        _ensure_env_var_line("USED_NEWS_TTL_DAYS", "7")
+        print(f"{GREEN}MongoDB detected. Backend set to mongodb.{RESET}")
+        return
+
+    _ensure_env_var_line("NEWS_MEMORY_BACKEND", "json")
+    _ensure_env_var_line("NEWS_MEMORY_JSON_PATH", "data/news_memory.json")
+    _ensure_env_var_line("USED_NEWS_TTL_DAYS", "7")
+    print(f"{GREEN}MongoDB not reachable. Backend set to json.{RESET}")
 
 def _probe_piper_espeakbridge() -> bool:
     """Returns True if current python 'piper' module has espeakbridge."""
@@ -279,6 +401,191 @@ def _try_download(urls, dest_path):
         raise last_err
     return False
 
+
+def _find_file_by_name(root_dir: str, target_name: str):
+    target_name = (target_name or "").strip().lower()
+    if not target_name:
+        return None
+    for root, _dirs, files in os.walk(root_dir):
+        for file in files:
+            if file.lower() == target_name:
+                return os.path.join(root, file)
+    return None
+
+
+def _download_if_missing(*, dest_path: str, url_candidates, label: str):
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    if os.path.exists(dest_path):
+        print(f"{GREEN}✅ {label} already exists: {dest_path}{RESET}")
+        return
+    print(f"{YELLOW}⏳ Downloading {label}...{RESET}")
+    _try_download(url_candidates, dest_path)
+    print(f"{GREEN}✅ {label} downloaded: {dest_path}{RESET}")
+
+
+def _hf_download_if_missing(
+    *,
+    repo_id: str,
+    filename_candidates,
+    dest_path: str,
+    label: str,
+):
+    if os.path.exists(dest_path):
+        print(f"{GREEN}✅ {label} already exists: {dest_path}{RESET}")
+        return
+
+    from huggingface_hub import hf_hub_download  # noqa: E402
+
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    last_err = None
+    for filename in filename_candidates:
+        try:
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=os.path.dirname(dest_path),
+                local_dir_use_symlinks=False,
+            )
+            expected = os.path.join(os.path.dirname(dest_path), filename.replace("/", os.sep))
+            if os.path.exists(expected) and expected != dest_path:
+                shutil.move(expected, dest_path)
+            if not os.path.exists(dest_path):
+                found = _find_file_by_name(os.path.dirname(dest_path), os.path.basename(dest_path))
+                if found and found != dest_path:
+                    shutil.move(found, dest_path)
+            if os.path.exists(dest_path):
+                print(f"{GREEN}✅ {label} downloaded: {dest_path}{RESET}")
+                return
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise RuntimeError(f"{label} could not be downloaded. Last error: {last_err}")
+
+
+def install_quality_model_pack():
+    """
+    Optional quality pack for cleaner faces/hands/composition.
+    Includes:
+    - GFPGAN face restoration weights
+    - ADetailer extension + face/hand detectors
+    - ESRGAN upscalers
+    - ControlNet canny/depth model files
+    """
+    print(f"\n{YELLOW}🎯 Quality Pack setup starting...{RESET}")
+
+    # 1) ADetailer extension (best effort)
+    try:
+        os.makedirs(FORGE_EXTENSIONS_DIR, exist_ok=True)
+        adetailer_ext_dir = os.path.join(FORGE_EXTENSIONS_DIR, "adetailer")
+        if os.path.isdir(adetailer_ext_dir):
+            print(f"{GREEN}✅ ADetailer extension already exists: {adetailer_ext_dir}{RESET}")
+        else:
+            if check_git():
+                print(f"{YELLOW}⏳ Cloning ADetailer extension...{RESET}")
+                subprocess.run(
+                    ["git", "clone", "https://github.com/Bing-su/adetailer.git", adetailer_ext_dir],
+                    check=True,
+                )
+                print(f"{GREEN}✅ ADetailer extension installed.{RESET}")
+            else:
+                print(f"{YELLOW}⚠️ Git not found, skipping ADetailer extension clone.{RESET}")
+    except Exception as e:
+        print(f"{YELLOW}⚠️ ADetailer extension install failed (continuing): {e}{RESET}")
+
+    # 2) GFPGAN
+    try:
+        _download_if_missing(
+            dest_path=os.path.join(GFPGAN_MODEL_DIR, "GFPGANv1.4.pth"),
+            url_candidates=[
+                "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.8/GFPGANv1.4.pth",
+                "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth",
+                "https://huggingface.co/lllyasviel/fav_models/resolve/main/facelib/GFPGANv1.4.pth",
+            ],
+            label="GFPGANv1.4",
+        )
+    except Exception as e:
+        print(f"{YELLOW}⚠️ GFPGAN download failed (continuing): {e}{RESET}")
+
+    # 3) ADetailer detector models
+    try:
+        _hf_download_if_missing(
+            repo_id="Bingsu/adetailer",
+            filename_candidates=["face_yolov8n.pt"],
+            dest_path=os.path.join(ADETAILER_MODEL_DIR, "face_yolov8n.pt"),
+            label="ADetailer face_yolov8n",
+        )
+    except Exception as e:
+        print(f"{YELLOW}⚠️ ADetailer face model download failed: {e}{RESET}")
+
+    try:
+        _hf_download_if_missing(
+            repo_id="Bingsu/adetailer",
+            filename_candidates=["hand_yolov8n.pt"],
+            dest_path=os.path.join(ADETAILER_MODEL_DIR, "hand_yolov8n.pt"),
+            label="ADetailer hand_yolov8n",
+        )
+    except Exception as e:
+        print(f"{YELLOW}⚠️ ADetailer hand model download failed: {e}{RESET}")
+
+    # 4) Upscaler models
+    try:
+        _download_if_missing(
+            dest_path=os.path.join(ESRGAN_MODEL_DIR, "RealESRGAN_x4plus.pth"),
+            url_candidates=[
+                "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+                "https://huggingface.co/lllyasviel/fav_models/resolve/main/RealESRGAN/RealESRGAN_x4plus.pth",
+            ],
+            label="RealESRGAN_x4plus",
+        )
+    except Exception as e:
+        print(f"{YELLOW}⚠️ RealESRGAN download failed: {e}{RESET}")
+
+    try:
+        _hf_download_if_missing(
+            repo_id="uwg/upscaler",
+            filename_candidates=["ESRGAN/4x-UltraSharp.pth", "4x-UltraSharp.pth"],
+            dest_path=os.path.join(ESRGAN_MODEL_DIR, "4x-UltraSharp.pth"),
+            label="4x-UltraSharp",
+        )
+    except Exception as e:
+        print(f"{YELLOW}⚠️ 4x-UltraSharp download failed: {e}{RESET}")
+
+    # 5) ControlNet canny/depth (sd15 family)
+    try:
+        _hf_download_if_missing(
+            repo_id="lllyasviel/ControlNet-v1-1",
+            filename_candidates=["control_v11p_sd15_canny.pth"],
+            dest_path=os.path.join(CONTROLNET_MODEL_DIR, "control_v11p_sd15_canny.pth"),
+            label="ControlNet canny model",
+        )
+        _hf_download_if_missing(
+            repo_id="lllyasviel/ControlNet-v1-1",
+            filename_candidates=["control_v11p_sd15_canny.yaml"],
+            dest_path=os.path.join(CONTROLNET_MODEL_DIR, "control_v11p_sd15_canny.yaml"),
+            label="ControlNet canny config",
+        )
+    except Exception as e:
+        print(f"{YELLOW}⚠️ ControlNet canny download failed: {e}{RESET}")
+
+    try:
+        _hf_download_if_missing(
+            repo_id="lllyasviel/ControlNet-v1-1",
+            filename_candidates=["control_v11f1p_sd15_depth.pth"],
+            dest_path=os.path.join(CONTROLNET_MODEL_DIR, "control_v11f1p_sd15_depth.pth"),
+            label="ControlNet depth model",
+        )
+        _hf_download_if_missing(
+            repo_id="lllyasviel/ControlNet-v1-1",
+            filename_candidates=["control_v11f1p_sd15_depth.yaml"],
+            dest_path=os.path.join(CONTROLNET_MODEL_DIR, "control_v11f1p_sd15_depth.yaml"),
+            label="ControlNet depth config",
+        )
+    except Exception as e:
+        print(f"{YELLOW}⚠️ ControlNet depth download failed: {e}{RESET}")
+
+    print(f"{GREEN}✅ Quality Pack step finished.{RESET}")
+
 def install_piper_tr_model_if_needed():
     """Downloads tr_TR-fahrettin-medium model/config into ./models."""
     print(f"\n{YELLOW}🗣️ Piper Türkçe modeli kontrol ediliyor (fahrettin-medium)...{RESET}")
@@ -313,6 +620,43 @@ def install_piper_tr_model_if_needed():
         print(f"{YELLOW}Manuel çözüm: {PIPER_TR_MODEL_NAME} ve {PIPER_TR_CONFIG_NAME} dosyalarını{RESET}")
         print(f"{YELLOW}models\\ klasörüne koyun.{RESET}")
         sys.exit(1)
+
+
+def install_piper_en_model_if_needed():
+    """Downloads en_US-lessac-medium model/config into ./models."""
+    print(f"\n{YELLOW}🗣️ Piper English model is being checked (en_US-lessac-medium)...{RESET}")
+
+    os.makedirs(PIPER_MODEL_DIR, exist_ok=True)
+    model_path = os.path.join(PIPER_MODEL_DIR, PIPER_EN_MODEL_NAME)
+    config_path = os.path.join(PIPER_MODEL_DIR, PIPER_EN_CONFIG_NAME)
+
+    env_model_url = os.environ.get("PIPER_EN_MODEL_URL")
+    env_config_url = os.environ.get("PIPER_EN_CONFIG_URL")
+    model_urls, config_urls = _build_piper_en_url_candidates()
+    if env_model_url:
+        model_urls.insert(0, env_model_url)
+    if env_config_url:
+        config_urls.insert(0, env_config_url)
+
+    if os.path.exists(model_path) and os.path.exists(config_path):
+        print(f"{GREEN}✅ Piper English model already exists: {model_path}{RESET}")
+    else:
+        try:
+            if not os.path.exists(model_path):
+                print(f"{YELLOW}⏳ Downloading English model...{RESET}")
+                _try_download(model_urls, model_path)
+            if not os.path.exists(config_path):
+                print(f"{YELLOW}⏳ Downloading English model config...{RESET}")
+                _try_download(config_urls, config_path)
+            print(f"{GREEN}✅ Piper English model downloaded: {model_path}{RESET}")
+        except Exception as e:
+            print(f"{YELLOW}⚠️ English model download failed (video will fallback if possible): {e}{RESET}")
+
+    # Set defaults for video narration when not already set.
+    _ensure_env_var_line("PIPER_EN_MODEL", os.path.join("models", PIPER_EN_MODEL_NAME))
+    _ensure_env_var_line("PIPER_EN_CONFIG", os.path.join("models", PIPER_EN_CONFIG_NAME))
+    _ensure_env_var_line("VIDEO_PIPER_MODEL", os.path.join("models", PIPER_EN_MODEL_NAME))
+    _ensure_env_var_line("VIDEO_PIPER_CONFIG", os.path.join("models", PIPER_EN_CONFIG_NAME))
 
 def install_requirements():
     """Gerekli kütüphaneleri yükler."""
@@ -496,6 +840,16 @@ def install_ollama_model():
     except FileNotFoundError:
         print(f"{RED}⚠️ Ollama bulunamadı! Lütfen https://ollama.com adresinden kurun.{RESET}")
 
+
+def maybe_install_quality_pack():
+    print(f"\n{YELLOW}Extra quality models can be installed (GFPGAN, ADetailer, ESRGAN, ControlNet).{RESET}")
+    print(f"{YELLOW}Note: this step needs extra disk and download time (~4-6 GB).{RESET}")
+    choice = input("Install Quality Pack? [E/H]: ").strip().lower()
+    if choice == "e":
+        install_quality_model_pack()
+    else:
+        print(f"{YELLOW}Quality Pack skipped.{RESET}")
+
 if __name__ == "__main__":
     os.system('cls' if os.name == 'nt' else 'clear')
     print(f"{GREEN}========================================{RESET}")
@@ -520,17 +874,26 @@ if __name__ == "__main__":
     # 2. Kütüphaneleri Yükle
     install_requirements()
 
+    # 2.0 News memory backend auto-config (mongodb if reachable, else json)
+    configure_news_memory_backend()
+
     # 2.1 Piper (TTS) - Windows binary fix (espeakbridge)
     install_piper_windows_binary_if_needed()
 
     # 2.2 Piper Turkish model (fahrettin-medium)
     install_piper_tr_model_if_needed()
 
+    # 2.3 Piper English model (lessac-medium) for news video narration
+    install_piper_en_model_if_needed()
+
     # 3. Forge Kur
     install_forge()
     
     # 4. Modeli İndir
     install_sd_model()
+
+    # 4.1 Optional Quality Pack (GFPGAN, ADetailer, ESRGAN, ControlNet)
+    maybe_install_quality_pack()
     
     # 5. Ollama Hazırla
     install_ollama_model()

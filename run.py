@@ -22,6 +22,23 @@ RESET = "\033[0m"
 APP_URL = "http://127.0.0.1:5173"
 ENV_FILE = Path(".env")
 
+def setup_utf8_console():
+    """Force UTF-8 output on Windows terminals to avoid mojibake."""
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+    if os.name == "nt":
+        try:
+            os.system("chcp 65001 >nul")
+        except Exception:
+            pass
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 def wait_for_port(host, port, timeout_sec=60):
     """Wait until a TCP port is accepting connections."""
     start = time.time()
@@ -161,6 +178,8 @@ def run_app():
         print("Güle güle! 👋")
 
 if __name__ == "__main__":
+    setup_utf8_console()
+
     import argparse
     parser = argparse.ArgumentParser(description="Atlas Assistant Launcher")
     parser.add_argument("--agent", action="store_true", help="Run in Autonomous Agent Mode (No Web UI)")
@@ -173,13 +192,13 @@ if __name__ == "__main__":
     if args.agent:
         print(f"{GREEN}🤖 Starting Atlas Autonomous Agent...{RESET}")
         try:
-            from core.system_check import ensure_sd_running, ensure_ollama_running
+            from core.runtime.system_check import ensure_sd_running, ensure_ollama_running
             
             # Ensure Services are Running
             ensure_ollama_running()
             ensure_sd_running()
             
-            from core.orchestrator import Orchestrator
+            from core.pipeline.orchestrator import Orchestrator
             # Dry run by default unless --live is passed
             dry_run = not args.live
             orchestrator = Orchestrator(dry_run=dry_run)

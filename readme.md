@@ -179,15 +179,29 @@ python run.py --agent --live
 ## Mimari (dosya düzeyi)
 - **Backend (FastAPI)**: `web/backend/main.py`
 - **Frontend (React/Vite)**: `web/frontend/`
-- **Agent Orchestrator**: `core/orchestrator.py`
+- **Agent Orchestrator**: `core/pipeline/orchestrator.py`
 - **Agent’lar**: `core/agents/`
   - `NewsAgent` → haberleri toplar ve skorlar
   - `RiskAgent` → güvenlik filtresi
   - `VisualDirectorAgent` → görsel prompt + SD çizim
   - `CaptionAgent` → caption üretimi
   - `SchedulerAgent` → paylaşım zamanı
-- **LLM katmanı (tek yol)**: `core/llm.py` (`LLMService` + legacy wrapper’lar)
-- **Stable Diffusion istemcisi**: `core/sd_client.py`
+- **LLM katmanı (tek yol)**: `core/clients/llm.py` (`LLMService` + legacy wrapper’lar)
+- **Stable Diffusion istemcisi**: `core/clients/sd_client.py`
+- **Instagram istemcisi**: `core/clients/insta_client.py`
+- **İçerik katmanı (haber/caption/üretim)**: `core/content/`
+- **Runtime katmanı (config + sistem kontrolleri)**: `core/runtime/`
+
+### Core moduler klasor yapisi
+
+```text
+core/
+  agents/      # Pipeline agent implementations
+  clients/     # External service clients (LLM, SD, Instagram)
+  content/     # News + caption + visual content helpers
+  pipeline/    # Orchestrator + shared pipeline state
+  runtime/     # Config + startup/system checks
+```
 
 ## Otonom ajan algoritması (adım adım)
 

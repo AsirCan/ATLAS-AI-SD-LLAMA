@@ -1,5 +1,5 @@
-from core.state import PipelineState
-from core.llm import LLMService
+﻿from core.pipeline.state import PipelineState
+from core.clients.llm import LLMService
 # Agents
 from core.agents.news_agent import NewsAgent
 from core.agents.risk_agent import RiskAgent
@@ -7,9 +7,9 @@ from core.agents.visual_agent import VisualDirectorAgent
 from core.agents.caption_agent import CaptionAgent
 from core.agents.scheduler_agent import SchedulerAgent
 # Output
-from core.insta_client import login_and_upload
+from core.clients.insta_client import login_and_upload
 from core.agents.base import CancelledError
-from core.news_memory import mark_used_titles
+from core.content.news_memory import mark_used_titles
 
 class Orchestrator:
     def __init__(self, dry_run: bool = True):
@@ -18,7 +18,7 @@ class Orchestrator:
         self._cancel_checker = None
         
         # Init Infrastructure
-        self.llm = LLMService() # Uses default from core/llm.py
+        self.llm = LLMService() # Uses default from core/clients/llm.py
         self.state = PipelineState()
         
         # Init Agents
@@ -42,6 +42,10 @@ class Orchestrator:
     def set_cancel_checker(self, checker):
         """Propagate cooperative cancel checker to all agents."""
         self._cancel_checker = checker
+        try:
+            self.llm.set_cancel_checker(checker)
+        except Exception:
+            pass
         self.news_agent.set_cancel_checker(checker)
         self.risk_agent.set_cancel_checker(checker)
         self.visual_agent.set_cancel_checker(checker)
@@ -144,3 +148,4 @@ class Orchestrator:
             # Mark state for callers
             self.state.upload_status = {"success": False, "message": "Cancelled"}
             return self.state
+

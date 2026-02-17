@@ -1,11 +1,23 @@
 import os
 
-# Proje kök dizini (core klasörünün bir üstü)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Proje kok dizini (core klasorunun bir ustu)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Piper model yolları (server-side TTS için sadece dosya yolu gerekir)
-PIPER_MODEL = os.path.join(BASE_DIR, "models", "tr_TR-fahrettin-medium.onnx")
-PIPER_CONFIG = os.path.join(BASE_DIR, "models", "tr_TR-fahrettin-medium.onnx.json")
+
+def _resolve_model_path(env_key: str, default_rel_path: str) -> str:
+    raw = os.environ.get(env_key, default_rel_path)
+    if os.path.isabs(raw):
+        return raw
+    return os.path.join(BASE_DIR, raw)
+
+
+# Default Turkish Piper model (chat/tts endpoint default)
+PIPER_MODEL = _resolve_model_path("PIPER_MODEL", os.path.join("models", "tr_TR-fahrettin-medium.onnx"))
+PIPER_CONFIG = _resolve_model_path("PIPER_CONFIG", os.path.join("models", "tr_TR-fahrettin-medium.onnx.json"))
+
+# Default English Piper model for video narration
+PIPER_EN_MODEL = _resolve_model_path("PIPER_EN_MODEL", os.path.join("models", "en_US-lessac-medium.onnx"))
+PIPER_EN_CONFIG = _resolve_model_path("PIPER_EN_CONFIG", os.path.join("models", "en_US-lessac-medium.onnx.json"))
 
 # Piper çalıştırılabilir dosyası
 #

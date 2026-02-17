@@ -3,11 +3,11 @@ import feedparser
 import difflib
 import random
 
-from core.llm import get_llm_service, unload_ollama
-from core.sd_client import resim_ciz
-from core.news_fetcher import RSS_SOURCES
-from core.news_memory import get_used_title_set, mark_used_titles, normalize_title, prune_expired
-from core.config import USED_NEWS_TTL_DAYS
+from core.clients.llm import get_llm_service, unload_ollama
+from core.clients.sd_client import resim_ciz
+from core.content.news_fetcher import RSS_SOURCES
+from core.content.news_memory import get_used_title_set, mark_used_titles, normalize_title, prune_expired
+from core.runtime.config import USED_NEWS_TTL_DAYS
 
 def dunya_gundemini_getir(limit=100):
     tum_basliklar = []
@@ -161,3 +161,4 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
     }
     
     return success, file_path, extra_data
+

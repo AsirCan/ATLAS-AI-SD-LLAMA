@@ -27,6 +27,8 @@ function App() {
     const [studioStep, setStudioStep] = useState('idle'); // idle, generating, review, uploading, done
     const [progress, setProgress] = useState(0);
     const [videoStatusText, setVideoStatusText] = useState('');
+    const [videoPercent, setVideoPercent] = useState(0);
+    const [agentStatusText, setAgentStatusText] = useState('');
     const [agentLogs, setAgentLogs] = useState([]);
     const [agentPercent, setAgentPercent] = useState(0);
     const [agentStage, setAgentStage] = useState('idle');
@@ -59,37 +61,25 @@ function App() {
 
     const isAgentRunning = agentStatus === 'running';
     const setAppModeSafe = (nextMode) => {
+        if (nextMode === appMode) return;
         if (isAgentRunning) return;
         setAppMode(nextMode);
     };
 
-    // Reset state when mode changes
-    useEffect(() => {
-        setStudioStep('idle');
-        setGeneratedNews(null);
-        setVideoStatusText('');
-        setStudioLoading(false);
-
-        // Don't wipe agent UI state while agent is still running in background.
-        if (!isAgentRunning) {
-            setAgentLogs([]);
-            setAgentPercent(0);
-            setAgentStage('idle');
-            setAgentStatus('idle');
-            setAgentCancelRequested(false);
-        }
-    }, [appMode, isAgentRunning]);
-
     // Keep agent progress visible even after navigation
     useEffect(() => {
         let interval;
+        const shouldPollAgent =
+            isAgentRunning ||
+            agentStatus === 'cancelling' ||
+            (appMode === 'studio' && studioStep === 'generating_agent');
 
         const tick = async () => {
             try {
                 const p = await api.checkAgentProgress();
 
                 if (p?.status) setAgentStatus(p.status);
-                if (p?.current_task) setVideoStatusText(p.current_task);
+                if (p?.current_task) setAgentStatusText(p.current_task);
                 if (typeof p?.percent === 'number') setAgentPercent(p.percent);
                 if (p?.stage) setAgentStage(p.stage);
                 if (p?.logs && Array.isArray(p.logs)) setAgentLogs(p.logs);
@@ -105,14 +95,13 @@ function App() {
             }
         };
 
-        // Always fetch once on entry to Studio (or while running)
-        if (appMode === 'studio' || isAgentRunning) {
+        if (shouldPollAgent) {
             tick();
             interval = setInterval(tick, 1000);
         }
 
         return () => clearInterval(interval);
-    }, [appMode, isAgentRunning]);
+    }, [appMode, studioStep, isAgentRunning, agentStatus]);
 
     // Drawing Modal State
     const [showDrawModal, setShowDrawModal] = useState(false);
@@ -541,7 +530,7 @@ function App() {
         const prompt = drawPrompt;
         setDrawPrompt('');
 
-        addMessage('user', `🎨 Çizim isteği: ${prompt}`);
+        addMessage('user', `Çizim isteği: ${prompt}`);
         setIsProcessing(true);
 
         try {
@@ -564,6 +553,7 @@ function App() {
         setStudioStep('generating');
         setGeneratedNews(null);
         setProgress(0);
+        setVideoStatusText('Günlük içerik hazırlanıyor...');
         try {
             const res = await api.generateNewsImage();
             if (res.success) {
@@ -586,33 +576,39 @@ function App() {
     const handleInstaUpload = async () => {
         if (!generatedNews) return;
         setStudioLoading(true);
+        const isCarouselMode = !!(generatedNews.images && Array.isArray(generatedNews.images));
         try {
             // MODE 1: CAROUSEL
-            if (generatedNews.images && Array.isArray(generatedNews.images)) {
+            if (isCarouselMode) {
+                setStudioStep('uploading_carousel');
                 const paths = generatedNews.images.map(img => img.path);
                 const res = await api.uploadCarouselToInstagram(paths, generatedNews.caption);
                 if (res.success) {
-                    alert('Carousel başarıyla Instagram\'a yüklendi! 🎉');
-                    setStudioStep('done_carousel');
+                    alert('Carousel basariyla Instagram\'a yuklendi!');
+                    setStudioStep('uploaded_carousel');
                     // setGeneratedNews(null); // Keep data for view
                 } else {
-                    alert('Yükleme Hatası:\n' + formatInstagramUploadError(res.message));
+                    alert('Yukleme Hatasi:\n' + formatInstagramUploadError(res.message));
+                    setStudioStep('done_carousel');
                 }
             }
             // MODE 2: SINGLE IMAGE
             else if (generatedNews.image_path) {
+                setStudioStep('uploading');
                 const res = await api.uploadToInstagram(generatedNews.image_path, generatedNews.caption);
                 if (res.success) {
-                    alert('Başarıyla Instagram\'a yüklendi!');
+                    alert('Basariyla Instagram\'a yuklendi!');
                     setStudioStep('done');
                     // setGeneratedNews(null); // Keep data for view
                 } else {
-                    alert('Yükleme Hatası:\n' + formatInstagramUploadError(res.message));
+                    alert('Yukleme Hatasi:\n' + formatInstagramUploadError(res.message));
+                    setStudioStep('review');
                 }
             }
         } catch (err) {
             console.error(err);
-            alert('Yükleme sırasında hata oluştu.');
+            alert('Yukleme sirasinda hata olustu.');
+            setStudioStep(isCarouselMode ? 'done_carousel' : 'review');
         } finally {
             setStudioLoading(false);
         }
@@ -626,6 +622,19 @@ function App() {
     };
 
     const hasConversation = messages.some((msg) => msg.role === 'user');
+    const isStudioFlow = [
+        'idle',
+        'generating',
+        'review',
+        'uploading',
+        'done',
+        'generating_carousel',
+        'done_carousel',
+        'uploaded_carousel',
+        'uploading_carousel',
+        'generating_agent',
+    ].includes(studioStep);
+    const isVideoFlow = studioStep === 'generating_video' || studioStep === 'done_video';
 
     return (
         <div className="h-screen w-full dark:bg-dark-900 bg-gray-50 dark:text-white text-gray-900 font-sans selection:bg-primary/30 overflow-hidden relative flex flex-col transition-colors duration-300">
@@ -687,8 +696,14 @@ function App() {
 
                         {appMode === 'studio' ? (
                             // --- STUDIO MODE UI ---
-                            <div className="flex-1 p-8 flex flex-col items-center justify-center overflow-y-auto">
-                                {!generatedNews && studioStep === 'idle' && (
+                            <div
+                                className={`flex-1 p-8 flex flex-col items-center overflow-y-auto ${
+                                    studioStep === 'generating_agent'
+                                        ? 'justify-start pt-4 pb-8'
+                                        : 'justify-center'
+                                }`}
+                            >
+                                {(!isStudioFlow || studioStep === 'idle') && (
                                     <div className="text-center space-y-6 max-w-lg">
                                         <div className="w-24 h-24 bg-gradient-to-tr from-pink-500 to-purple-600 rounded-3xl flex items-center justify-center mx-auto shadow-2xl shadow-pink-500/30">
                                             <Camera className="w-12 h-12 text-white" />
@@ -722,9 +737,16 @@ function App() {
                                                     setStudioLoading(true);
                                                     setStudioStep('generating_carousel');
                                                     setGeneratedNews(null);
+                                                    setVideoStatusText('Carousel hazırlanıyor...');
 
                                                     try {
-                                                        await api.generateCarousel();
+                                                        const res = await api.generateCarousel();
+                                                        if (!res?.success) {
+                                                            alert('Islem baslatilamadi: ' + (res?.error || 'Bilinmeyen hata'));
+                                                            setStudioStep('idle');
+                                                            setStudioLoading(false);
+                                                            return;
+                                                        }
                                                         // Poll for progress
                                                         const interval = setInterval(async () => {
                                                             const p = await api.checkCarouselProgress();
@@ -776,6 +798,7 @@ function App() {
                                                     setStudioStep('generating_agent'); // New step for simple generic progress
                                                     setGeneratedNews(null);
                                                     setAgentCancelRequested(false);
+                                                    setAgentStatusText('Ajan başlatılıyor...');
 
                                                     try {
                                                         const res = await api.runAutonomousAgent(isLive);
@@ -1057,11 +1080,11 @@ function App() {
                                 )}
 
                                 {studioStep === 'generating_agent' && (
-                                    <div className="w-full flex flex-col items-center space-y-6">
-                                        <div className="w-full max-w-2xl space-y-4">
+                                    <div className="w-full max-w-[1200px] flex flex-col items-center space-y-6">
+                                        <div className="w-full space-y-4 z-20 rounded-2xl border border-white/10 bg-[#070b16]/70 backdrop-blur-md p-4 md:p-5 shadow-2xl">
                                             <div className="text-center space-y-2">
                                                 <p className="text-2xl font-bold text-white">Yapay Zeka Ajanı Çalışıyor</p>
-                                                <p className="text-sm dark:text-gray-400 text-gray-500">{videoStatusText || "Durum alınıyor..."}</p>
+                                                <p className="text-sm dark:text-gray-400 text-gray-500">{agentStatusText || "Durum alınıyor..."}</p>
                                             </div>
 
                                             <div className="flex items-center justify-center gap-3">
@@ -1125,13 +1148,13 @@ function App() {
                                             </div>
                                         </div>
 
-                                        <LogTerminal logs={agentLogs} />
+                                        <LogTerminal logs={agentLogs} className="w-full" />
                                     </div>
                                 )}
 
 
 
-                                {(studioStep === 'done_carousel' || studioStep === 'uploading_carousel') && generatedNews && generatedNews.images && (
+                                {(studioStep === 'done_carousel' || studioStep === 'uploading_carousel' || studioStep === 'uploaded_carousel') && generatedNews && generatedNews.images && (
                                     <div className="w-full h-full flex flex-col gap-6">
                                         {/* Carousel Gallery View */}
                                         <div className="flex-1 overflow-x-auto overflow-y-hidden flex gap-4 p-4 items-center scrollbar-thin scrollbar-thumb-white/20 pb-8">
@@ -1182,22 +1205,22 @@ function App() {
 
                                                 <button
                                                     onClick={handleInstaUpload}
-                                                    disabled={studioLoading || studioStep === 'done'}
-                                                    className={`px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${studioStep === 'done'
+                                                    disabled={studioLoading || studioStep === 'uploaded_carousel'}
+                                                    className={`px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${studioStep === 'uploaded_carousel'
                                                         ? 'bg-green-500 text-white'
                                                         : 'bg-gradient-to-r from-pink-500 to-purple-600 hover:shadow-lg hover:shadow-pink-500/25 text-white'
                                                         }`}
                                                     title="Instagram'a Yükle"
                                                 >
-                                                    {studioLoading ? <RefreshCw className="animate-spin" /> : (studioStep === 'done' ? 'Yüklendi' : 'Instagram\'a Yükle')}
-                                                    {studioStep !== 'done' && <Upload size={18} />}
+                                                    {studioLoading ? <RefreshCw className="animate-spin" /> : (studioStep === 'uploaded_carousel' ? 'Yüklendi' : 'Instagram\'a Yükle')}
+                                                    {studioStep !== 'uploaded_carousel' && <Upload size={18} />}
                                                 </button>
                                             </div>
                                         </div>
                                     </div>
                                 )}
 
-                                {generatedNews && (studioStep === 'review' || studioStep === 'done') && (
+                                {generatedNews && (studioStep === 'review' || studioStep === 'uploading' || studioStep === 'done') && (
                                     <div className="w-full max-w-6xl grid md:grid-cols-2 gap-8 items-stretch animate-fade-in relative z-10">
                                         <div className="flex flex-col h-full">
                                             <div className="relative group rounded-2xl overflow-hidden shadow-2xl border border-white/10 h-full">
@@ -1261,31 +1284,34 @@ function App() {
                         ) : appMode === 'video' ? (
                             // --- VIDEO MODE UI ---
                             <div className="flex-1 p-8 flex flex-col items-center justify-center text-center space-y-6 overflow-y-auto">
-                                {!generatedNews && studioStep === 'idle' && (
+                                {!isVideoFlow && (
                                     <>
                                         <div className="w-24 h-24 bg-gradient-to-tr from-red-600 to-orange-600 rounded-3xl flex items-center justify-center mx-auto shadow-2xl shadow-red-500/30">
                                             <Film className="w-12 h-12 text-white" />
                                         </div>
                                         <h2 className="text-3xl font-bold">Gündem Özeti Videosu</h2>
                                         <p className="text-gray-400 max-w-md mx-auto">
-                                            Otomatik olarak 3 adet haber seçilir, görselleri oluşturulur ve haber spikeri tonunda seslendirilerek video haline getirilir.
+                                            Otomatik olarak 3 haber seçilir, kare görseller üretilir ve İngilizce haber anlatımıyla video oluşturulur.
                                         </p>
                                         <div className="p-6 bg-dark-900 rounded-xl border border-white/10 max-w-lg mx-auto w-full relative z-10 shadow-2xl space-y-4">
                                             <div className="flex items-center gap-2 text-sm dark:text-gray-400 text-gray-500 justify-center">
                                                 <span>• 3 Haber</span>
-                                                <span>• Seslendirme</span>
-                                                <span>• 30 Saniye</span>
+                                                <span>• English Voice</span>
+                                                <span>• 30-40 Saniye</span>
                                             </div>
                                             <button
                                                 onClick={async () => {
                                                     setStudioLoading(true);
                                                     setStudioStep('generating_video');
                                                     setGeneratedNews(null);
+                                                    setVideoStatusText('Haber videosu hazırlanıyor...');
+                                                    setVideoPercent(2);
                                                     try {
                                                         const res = await api.generateNewsVideo(); // Now starts bg task
                                                         if (!res.success) {
                                                             alert('Hata: ' + res.error);
                                                             setStudioStep('idle');
+                                                            setVideoPercent(0);
                                                             setStudioLoading(false);
                                                             return;
                                                         }
@@ -1297,16 +1323,21 @@ function App() {
                                                             if (p.current_task) {
                                                                 setVideoStatusText(p.current_task);
                                                             }
+                                                            if (typeof p.percent === 'number') {
+                                                                setVideoPercent(Math.max(0, Math.min(100, p.percent)));
+                                                            }
 
                                                             if (p.status === 'done') {
                                                                 clearInterval(interval);
                                                                 setGeneratedNews({ video_url: p.result });
                                                                 setStudioStep('done_video');
+                                                                setVideoPercent(100);
                                                                 setStudioLoading(false);
                                                             } else if (p.status === 'error') {
                                                                 clearInterval(interval);
                                                                 alert('Video Hatası: ' + p.error);
                                                                 setStudioStep('idle');
+                                                                setVideoPercent(0);
                                                                 setStudioLoading(false);
                                                             }
                                                         }, 2000);
@@ -1314,6 +1345,7 @@ function App() {
                                                     } catch (err) {
                                                         alert('Bağlantı Hatası');
                                                         setStudioStep('idle');
+                                                        setVideoPercent(0);
                                                         setStudioLoading(false);
                                                     }
                                                 }}
@@ -1341,8 +1373,12 @@ function App() {
                                         </div>
 
                                         <div className="w-64 mx-auto bg-dark-800 rounded-full h-2 overflow-hidden border border-white/10">
-                                            <div className="h-full bg-gradient-to-r from-red-600 to-orange-500 animate-pulse w-full origin-left scale-x-50"></div>
+                                            <div
+                                                className="h-full bg-gradient-to-r from-red-600 to-orange-500 transition-all duration-500"
+                                                style={{ width: `${Math.max(2, videoPercent)}%` }}
+                                            />
                                         </div>
+                                        <p className="text-xs text-gray-400">{Math.max(0, Math.min(100, Math.round(videoPercent)))}%</p>
                                     </div>
                                 )}
 
@@ -1353,7 +1389,7 @@ function App() {
                                                 src={generatedNews.video_url}
                                                 controls
                                                 autoPlay
-                                                className="w-full rounded-xl aspect-[9/16] object-cover"
+                                                className="w-full rounded-xl aspect-square object-contain bg-black"
                                             ></video>
                                         </div>
                                         <button

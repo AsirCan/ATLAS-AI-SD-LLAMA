@@ -1,14 +1,26 @@
-from typing import List, Dict, Any
-from core.state import PipelineState
+﻿import re
+from typing import List, Dict, Any, Optional
+from core.pipeline.state import PipelineState
 from core.agents.base import BaseAgent
 from core.agents.base import CancelledError
-from core.config import (
+from core.runtime.config import (
     RISK_BLACKLIST_KEYWORDS,
     RISK_WHITELIST_KEYWORDS,
     RISK_CATEGORY_THRESHOLDS,
     RISK_DEFAULT_THRESHOLD,
     RISK_WHITELIST_MAX_SCORE,
 )
+
+
+def _find_keyword_hit(text: str, keywords: List[str]) -> Optional[str]:
+    haystack = str(text or "").lower()
+    for kw in keywords:
+        # Match whole words to avoid false positives like "war" inside "water".
+        pattern = rf"\b{re.escape(str(kw).lower())}\b"
+        if re.search(pattern, haystack):
+            return kw
+    return None
+
 
 class RiskAgent(BaseAgent):
     def _execute(self, state: PipelineState) -> PipelineState:
@@ -27,15 +39,16 @@ class RiskAgent(BaseAgent):
             self._cancel_guard("risk_loop")
             title = item.get("title", "")
             summary = item.get("summary", "")
-            combined = f"{title} {summary}".lower()
+            combined = f"{title} {summary}"
 
             # Hard blacklist: immediate block
-            if any(k in combined for k in RISK_BLACKLIST_KEYWORDS):
-                risk_report[title] = {"score": 10, "reason": ["blacklist_hit"]}
-                self.log(f"Blocked item (blacklist): {title}")
+            blacklisted_kw = _find_keyword_hit(combined, RISK_BLACKLIST_KEYWORDS)
+            if blacklisted_kw:
+                risk_report[title] = {"score": 10, "reason": [f"blacklist_hit:{blacklisted_kw}"]}
+                self.log(f"Blocked item (blacklist:{blacklisted_kw}): {title}")
                 continue
 
-            whitelist_hit = any(k in combined for k in RISK_WHITELIST_KEYWORDS)
+            whitelist_hit = _find_keyword_hit(combined, RISK_WHITELIST_KEYWORDS) is not None
 
             prompt = f"""
             Analyze this news item for Instagram Brand Safety.
@@ -93,3 +106,4 @@ class RiskAgent(BaseAgent):
         
         self.log(f"Risk Filter: {len(state.news_items)} -> {len(safe_items)} safe items.")
         return state
+

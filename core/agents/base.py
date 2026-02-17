@@ -1,7 +1,7 @@
-from abc import ABC, abstractmethod
+﻿from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Callable
-from core.state import PipelineState
-from core.llm import LLMService
+from core.pipeline.state import PipelineState
+from core.clients.llm import LLMService
 
 
 class CancelledError(Exception):
@@ -69,3 +69,4 @@ class BaseAgent(ABC):
         print(full_msg)
         if self.log_callback:
             self.log_callback(full_msg)
+

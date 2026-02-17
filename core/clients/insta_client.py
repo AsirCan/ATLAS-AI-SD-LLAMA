@@ -6,8 +6,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 from instagrapi import Client
 from instagrapi.exceptions import TwoFactorRequired, ChallengeRequired, LoginRequired
-from core.llm import llm_answer
-from core.config import RED, GREEN, YELLOW, RESET, INSTA_USERNAME, INSTA_SESSIONID
+from core.clients.llm import llm_answer
+from core.content.caption_format import format_caption_hashtags_bottom
+from core.runtime.config import RED, GREEN, YELLOW, RESET, INSTA_USERNAME, INSTA_SESSIONID
 
 try:
     import keyring
@@ -583,6 +584,7 @@ def prepare_insta_caption(prompt_text):
     time.sleep(4) 
     
     caption = generate_caption_with_llama(prompt_text)
+    caption = format_caption_hashtags_bottom(caption)
     
     # Ekrana da basalım (log için)
     print(f"\n{YELLOW}" + "="*50)
@@ -597,6 +599,8 @@ def login_and_upload(image_path, caption):
     Doğrudan verilen caption ile yükleme yapar.
     Kullanıcı onayı ARTITK buranın dışındadır (UI veya main.py içinde).
     """
+    caption = format_caption_hashtags_bottom(caption or "")
+
     if not image_path or not os.path.exists(image_path):
         if not ((image_path or "").startswith("http://") or (image_path or "").startswith("https://")):
             return False, "Hata: Resim dosyasi bulunamadi."
@@ -642,6 +646,8 @@ def login_and_upload_album(image_paths, caption):
     image_paths: List of file paths (absolutes)
     Otomatik olarak JPG formatına çevirir (Instagram için).
     """
+    caption = format_caption_hashtags_bottom(caption or "")
+
     if not image_paths or len(image_paths) == 0:
         return False, "Hata: Yüklenecek resim listesi boş."
 
@@ -735,3 +741,4 @@ def login_and_upload_album(image_paths, caption):
                 os.rmdir(temp_dir)
         except:
             pass
+

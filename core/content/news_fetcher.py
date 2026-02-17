@@ -1,7 +1,7 @@
-import feedparser
+﻿import feedparser
 import random
-from core.news_memory import get_used_title_set, normalize_title, prune_expired
-from core.config import USED_NEWS_TTL_DAYS
+from core.content.news_memory import get_used_title_set, normalize_title, prune_expired
+from core.runtime.config import USED_NEWS_TTL_DAYS
 
 RSS_SOURCES = [
     "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -47,3 +47,4 @@ def get_top_3_separate_news():
     # Simple selection: Just take top 3 distinct ones (already shuffled)
     # If not enough, fall back to original list.
     return (filtered[:3] if len(filtered) >= 3 else headlines[:3])
+

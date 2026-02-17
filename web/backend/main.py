@@ -21,22 +21,22 @@ import requests
 # Import core modules
 # Config is safe to import early
 try:
-    from core.config import RED, YELLOW, GREEN, RESET
+    from core.runtime.config import RED, YELLOW, GREEN, RESET
 except ImportError:
     # Fallback colors if config is missing (unlikely)
     RED, YELLOW, GREEN, RESET = "", "", "", ""
 
 try:
-    from core.llm import llm_answer, visual_prompt_generator
-    from core.sd_client import resim_ciz
-    from core.daily_visual_agent import gunluk_instagram_gorseli_uret
-    from core.insta_client import login_and_upload, prepare_insta_caption, login_and_upload_album
-    from core.system_check import ensure_sd_running
-    from core.llm import ollama_warmup
+    from core.clients.llm import llm_answer, visual_prompt_generator
+    from core.clients.sd_client import resim_ciz
+    from core.content.daily_visual_agent import gunluk_instagram_gorseli_uret
+    from core.clients.insta_client import login_and_upload, prepare_insta_caption, login_and_upload_album
+    from core.runtime.system_check import ensure_sd_running
+    from core.clients.llm import ollama_warmup
     # We will implement custom TTS logic here to avoid playing on server
     
     # Import model config (no local playback, config only)
-    from core.tts_config import PIPER_MODEL, PIPER_CONFIG, PIPER_BIN
+    from core.runtime.tts_config import PIPER_MODEL, PIPER_CONFIG, PIPER_BIN
 except ImportError as e:
     print(f"Warning: Could not import core modules: {e}")
     # Define fallback if import fails (so execution doesn't crash)
@@ -285,10 +285,15 @@ CAROUSEL_PROGRESS = {
     "error": None
 }
 
-def update_video_progress(task_name):
+def update_video_progress(task_name, percent=None):
     print(f"Video Progress: {task_name}")
     VIDEO_PROGRESS["status"] = "generating"
     VIDEO_PROGRESS["current_task"] = task_name
+    if percent is not None:
+        try:
+            VIDEO_PROGRESS["percent"] = max(0, min(100, int(percent)))
+        except Exception:
+            pass
     
 @app.get("/api/news/video_progress")
 def video_progress_endpoint():
@@ -308,7 +313,21 @@ def run_video_generation_task():
         from video_generator import process_daily_news_video
         
         # Define callback to update global state
-        def progress_callback(msg):
+        def progress_callback(payload):
+            if isinstance(payload, dict):
+                task = payload.get("task") or payload.get("message") or ""
+                percent = payload.get("percent")
+                if task:
+                    VIDEO_PROGRESS["current_task"] = str(task)
+                    print(f"Progress Update: {task}")
+                if percent is not None:
+                    try:
+                        VIDEO_PROGRESS["percent"] = max(0, min(100, int(percent)))
+                    except Exception:
+                        pass
+                return
+
+            msg = str(payload)
             VIDEO_PROGRESS["current_task"] = msg
             print(f"Progress Update: {msg}")
             
@@ -321,6 +340,7 @@ def run_video_generation_task():
              video_url = f"http://127.0.0.1:8000/videos/{video_rel_path}".replace("\\", "/")
              
              VIDEO_PROGRESS["status"] = "done"
+             VIDEO_PROGRESS["percent"] = 100
              VIDEO_PROGRESS["result"] = video_url
              VIDEO_PROGRESS["current_task"] = "Tamamlandı!"
         else:
@@ -336,9 +356,15 @@ def run_video_generation_task():
 
 @app.post("/api/news/video_generate")
 async def news_video_generate_endpoint(background_tasks: BackgroundTasks):
-    # Check if already running
-    if VIDEO_PROGRESS["status"] == "generating":
-        return {"success": False, "error": "Already generating a video!"}
+    active_job = _active_long_job()
+    if active_job:
+        if active_job == "video":
+            return {"success": False, "error": "Video already generating."}
+        return {
+            "success": False,
+            "error": f"{_job_display_name(active_job)} is running. Wait until it finishes.",
+            "active_job": active_job,
+        }
         
     background_tasks.add_task(run_video_generation_task)
     return {"success": True, "message": "Video generation started in background"}
@@ -355,6 +381,25 @@ AGENT_PROGRESS = {
     "cancel_requested": False
 }
 
+
+def _active_long_job():
+    """Return currently running long task name: agent|carousel|video or None."""
+    if AGENT_PROGRESS.get("status") == "running":
+        return "agent"
+    if CAROUSEL_PROGRESS.get("status") == "generating":
+        return "carousel"
+    if VIDEO_PROGRESS.get("status") == "generating":
+        return "video"
+    return None
+
+
+def _job_display_name(job: str) -> str:
+    return {
+        "agent": "Otonom Ajan",
+        "carousel": "Carousel",
+        "video": "Video",
+    }.get(job, job)
+
 def run_agent_task(live_mode: bool = False):
     global AGENT_PROGRESS
     AGENT_PROGRESS = {
@@ -368,8 +413,8 @@ def run_agent_task(live_mode: bool = False):
     }
     
     try:
-        from core.orchestrator import Orchestrator
-        from core.system_check import ensure_sd_running, ensure_ollama_running
+        from core.pipeline.orchestrator import Orchestrator
+        from core.runtime.system_check import ensure_sd_running, ensure_ollama_running
 
         def set_stage(stage: str, percent: int, task: str):
             AGENT_PROGRESS["stage"] = stage
@@ -497,19 +542,35 @@ async def cancel_agent_endpoint():
     """
     Cooperative cancel:
     - Sets a flag checked by the background job between steps.
-    - If currently in a blocking SD generation call, it will cancel after that step completes.
+    - If SD generation is in progress, also sends Forge interrupt for faster stop.
     """
     if AGENT_PROGRESS.get("status") != "running":
-        return {"success": False, "error": "Ajan çalışmıyor."}
+        return {"success": False, "error": "Agent is not running."}
+
     AGENT_PROGRESS["cancel_requested"] = True
-    AGENT_PROGRESS["current_task"] = "İptal isteği alındı. Güvenli durdurma bekleniyor..."
+    AGENT_PROGRESS["stage"] = "cancelling"
+    AGENT_PROGRESS["current_task"] = "Cancel requested. Waiting for safe stop..."
+
+    try:
+        # Best-effort: wake up a blocking SD generation quickly.
+        requests.post("http://127.0.0.1:7860/sdapi/v1/interrupt", timeout=2)
+    except Exception:
+        pass
+
     return {"success": True, "message": "Cancel requested"}
 
 @app.post("/api/agent/run")
 async def run_agent_endpoint(background_tasks: BackgroundTasks, live: bool = False):
-    if AGENT_PROGRESS["status"] == "running":
-        return {"success": False, "error": "Ajan zaten çalışıyor!"}
-    
+    active_job = _active_long_job()
+    if active_job:
+        if active_job == "agent":
+            return {"success": False, "error": "Ajan zaten calisiyor!"}
+        return {
+            "success": False,
+            "error": f"{_job_display_name(active_job)} calisiyor. Bitmesini bekle.",
+            "active_job": active_job,
+        }
+
     background_tasks.add_task(run_agent_task, live_mode=live)
     return {"success": True, "message": "Autonomous Agent started"}
 
@@ -530,7 +591,7 @@ def run_carousel_generation_task():
     }
     
     try:
-        from core.carousel_agent import generate_carousel_content
+        from core.content.carousel_agent import generate_carousel_content
         
         def progress_callback(msg):
             # Eğer "LAYER_UPDATE:" ile başlıyorsa özel işlem yapabiliriz
@@ -575,9 +636,16 @@ def run_carousel_generation_task():
 
 @app.post("/api/carousel/generate")
 async def carousel_generate_endpoint(background_tasks: BackgroundTasks):
-    if CAROUSEL_PROGRESS["status"] == "generating":
-        return {"success": False, "error": "Zaten işlem devam ediyor!"}
-    
+    active_job = _active_long_job()
+    if active_job:
+        if active_job == "carousel":
+            return {"success": False, "error": "Carousel zaten uretiliyor!"}
+        return {
+            "success": False,
+            "error": f"{_job_display_name(active_job)} calisiyor. Bitmesini bekle.",
+            "active_job": active_job,
+        }
+
     background_tasks.add_task(run_carousel_generation_task)
     return {"success": True, "message": "Carousel generation started"}
 
@@ -622,7 +690,7 @@ async def instagram_credentials_endpoint(req: InstaCredentialsRequest):
     This avoids keeping passwords in .env.
     """
     try:
-        from core.insta_client import set_instagram_credentials
+        from core.clients.insta_client import set_instagram_credentials
         set_instagram_credentials(req.username, req.password)
         return {"success": True, "message": "Credentials saved"}
     except Exception as e:
@@ -632,7 +700,7 @@ async def instagram_credentials_endpoint(req: InstaCredentialsRequest):
 async def instagram_session_reset_endpoint():
     """Deletes insta_session.json to force a fresh login next upload."""
     try:
-        from core.insta_client import reset_instagram_session
+        from core.clients.insta_client import reset_instagram_session
         ok = reset_instagram_session()
         return {"success": bool(ok)}
     except Exception as e:

@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta
-from core.state import PipelineState
+﻿from datetime import datetime, timedelta
+from core.pipeline.state import PipelineState
 from core.agents.base import BaseAgent
 
 class SchedulerAgent(BaseAgent):
@@ -24,3 +24,4 @@ class SchedulerAgent(BaseAgent):
         self.log(f"Scheduled for: {state.scheduled_time}")
         
         return state
+

@@ -1,5 +1,6 @@
-from core.state import PipelineState
+﻿from core.pipeline.state import PipelineState
 from core.agents.base import BaseAgent
+from core.content.caption_format import format_caption_hashtags_bottom
 
 class CaptionAgent(BaseAgent):
     def _execute(self, state: PipelineState) -> PipelineState:
@@ -42,7 +43,7 @@ class CaptionAgent(BaseAgent):
                 
                 # Construct final text
                 hashtags = result.get("hashtags", "")
-                final_text = f"{best_caption['text']}\n\n{hashtags}"
+                final_text = format_caption_hashtags_bottom(best_caption.get("text", ""), hashtags)
                 
                 state.final_caption = final_text
                 self.log(f"Selected Caption ({best_caption['style']}): {final_text[:30]}...")
@@ -51,3 +52,4 @@ class CaptionAgent(BaseAgent):
             self.log(f"Caption generation failed: {e}")
             
         return state
+

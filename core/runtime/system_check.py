@@ -1,7 +1,7 @@
 import socket
 import subprocess
 import time
-from core.config import RED, RESET, GREEN, YELLOW
+from core.runtime.config import RED, RESET, GREEN, YELLOW
 
 # ==================================================
 # Internet / SD (Forge) kontrol yardımcıları
@@ -123,3 +123,4 @@ def ensure_sd_running(wait_seconds=20, log_callback=print, cancel_checker=None, 
         time.sleep(2)
 
     return False
+
