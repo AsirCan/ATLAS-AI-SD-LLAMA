@@ -11,4 +11,5 @@ python-dotenv
 pydub
 keyring
 pathvalidate
+faster-whisper
 pymongo

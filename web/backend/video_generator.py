@@ -31,7 +31,10 @@ VIDEO_NEGATIVE_PROMPT = (
     "text, letters, logo, watermark, signature, collage, split image, split screen, multi-panel, "
     "phone screen, ui overlay, subtitles, cartoon, anime, illustration, painting, 3d render, "
     "close-up portrait, extreme close-up face, distorted face, asymmetrical eyes, bad anatomy, "
-    "deformed hands, extra fingers, fused fingers, low quality, blurry, pixelated"
+    "bad proportions, deformed, ugly, malformed limbs, disfigured hands, poorly drawn face, "
+    "cloned face, unnatural skin, fake, cgi look, plastic looking, "
+    "deformed hands, extra fingers, missing fingers, fused fingers, extra limbs, "
+    "low quality, blurry, pixelated, worst quality, low resolution, overexposed, underexposed"
 )
 
 
@@ -119,8 +122,10 @@ def generate_visual_prompt(news_title: str) -> str:
         "Style: documentary realism, award-winning photography, detailed, dramatic but natural lighting.\n"
         "Rules:\n"
         "- Keep a single coherent scene.\n"
-        "- Prefer medium or wide shot.\n"
-        "- Avoid close-up faces and avoid crowded foreground people.\n"
+        "- STRONGLY prefer wide-angle or medium-wide environmental shots.\n"
+        "- Do NOT include any human faces, people portraits, or close-up of any person.\n"
+        "- Show locations, objects, architecture, landscapes, or symbolic elements instead of people.\n"
+        "- If people must appear, show them from behind, far away, or as silhouettes only.\n"
         "- Avoid any phone screen, UI overlays, text in-frame, or split composition.\n"
         "- No logos or watermarks.\n"
         "Output only one English prompt."
@@ -194,16 +199,17 @@ def _write_subtitle_text_file(text: str, temp_dir: Path) -> Optional[Path]:
     return path
 
 
-def _format_srt_timestamp(seconds: float) -> str:
-    total_ms = max(0, int(round(float(seconds) * 1000.0)))
-    hours = total_ms // 3_600_000
-    minutes = (total_ms % 3_600_000) // 60_000
-    secs = (total_ms % 60_000) // 1000
-    millis = total_ms % 1000
-    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+def _format_ass_timestamp(seconds: float) -> str:
+    """Format seconds to ASS timestamp: H:MM:SS.cc (centiseconds)."""
+    total_cs = max(0, int(round(float(seconds) * 100.0)))
+    hours = total_cs // 360_000
+    minutes = (total_cs % 360_000) // 6_000
+    secs = (total_cs % 6_000) // 100
+    cs = total_cs % 100
+    return f"{hours}:{minutes:02d}:{secs:02d}.{cs:02d}"
 
 
-def _split_subtitle_chunks(text: str, words_per_chunk: int = 6):
+def _split_subtitle_chunks(text: str, words_per_chunk: int = 4):
     words = sanitize_text(text).split()
     if not words:
         return []
@@ -211,44 +217,243 @@ def _split_subtitle_chunks(text: str, words_per_chunk: int = 6):
     return [" ".join(words[i : i + chunk_size]) for i in range(0, len(words), chunk_size)]
 
 
-def _write_timed_subtitle_srt(text: str, duration_seconds: float, temp_dir: Path) -> Optional[Path]:
-    chunks = _split_subtitle_chunks(text, words_per_chunk=6)
-    if not chunks:
+# ---------------------------------------------------------------------------
+# Whisper forced-alignment for accurate word-level subtitle timing
+# ---------------------------------------------------------------------------
+
+_whisper_model = None
+
+
+def _get_whisper_model():
+    """Lazy-load the faster_whisper tiny model (39 MB, very fast)."""
+    global _whisper_model
+    if _whisper_model is not None:
+        return _whisper_model
+    try:
+        from faster_whisper import WhisperModel  # noqa: E402
+
+        _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
+        print("[Subtitle] Whisper tiny model loaded for subtitle alignment.")
+        return _whisper_model
+    except Exception as e:
+        print(f"[Subtitle] Whisper model load failed: {e}")
         return None
 
-    # Evenly spread subtitle chunks across clip audio duration.
-    duration = max(float(duration_seconds or 0.0), len(chunks) * 0.9)
-    step = duration / max(1, len(chunks))
 
-    lines = []
-    for i, chunk in enumerate(chunks, start=1):
-        start_s = (i - 1) * step
-        end_s = duration if i == len(chunks) else i * step
-        if (end_s - start_s) < 0.35:
-            end_s = start_s + 0.35
-        lines.append(str(i))
-        lines.append(f"{_format_srt_timestamp(start_s)} --> {_format_srt_timestamp(end_s)}")
-        lines.append(chunk)
-        lines.append("")
+def _get_word_timestamps(audio_path: Path):
+    """
+    Use faster_whisper to extract word-level timestamps from a WAV file.
+    Returns list of (start, end, word) tuples, or None on failure.
+    """
+    model = _get_whisper_model()
+    if model is None:
+        return None
+    try:
+        segments, _ = model.transcribe(
+            str(audio_path),
+            language="en",
+            word_timestamps=True,
+            vad_filter=False,
+        )
+        words = []
+        for segment in segments:
+            if segment.words:
+                for w in segment.words:
+                    words.append((w.start, w.end, w.word.strip()))
+        if not words:
+            return None
+        return words
+    except Exception as e:
+        print(f"[Subtitle] Whisper transcription failed: {e}")
+        return None
 
-    path = temp_dir / f"subtitle_{uuid.uuid4()}.srt"
-    path.write_text("\n".join(lines), encoding="utf-8")
+
+def _group_words_into_chunks(word_timestamps, words_per_chunk: int = 4):
+    """
+    Group word-level timestamps into subtitle chunks using smart phrase
+    boundaries rather than a fixed word count.  Prefers to split after
+    punctuation (comma, period, colon, semicolon) and before conjunctions
+    or clause-starting prepositions.  Target chunk size is 3-6 words.
+    """
+    if not word_timestamps:
+        return []
+
+    MIN_CHUNK = 3
+    MAX_CHUNK = 6
+
+    # Tokens that signal a natural break *before* them
+    BREAK_BEFORE = {
+        "and", "but", "or", "so", "yet", "while", "as", "that", "which",
+        "where", "when", "who", "because", "although", "however",
+        "in", "on", "at", "for", "with", "from", "to", "by",
+        "about", "after", "before", "during", "over", "under",
+    }
+
+    chunks = []
+    buf = []  # accumulate (start, end, word)
+    for ts in word_timestamps:
+        word = ts[2]
+        # Should we break *before* this word?
+        if len(buf) >= MIN_CHUNK:
+            prev_word = buf[-1][2] if buf else ""
+            # Break after punctuation at end of previous word
+            if prev_word and prev_word[-1] in ".,;:!?":
+                chunks.append(_flush_chunk(buf))
+                buf = []
+            # Break before a conjunction / clause-starting preposition
+            elif word.lower().rstrip(".,;:!?") in BREAK_BEFORE:
+                chunks.append(_flush_chunk(buf))
+                buf = []
+        # Hard cutoff at MAX_CHUNK
+        if len(buf) >= MAX_CHUNK:
+            chunks.append(_flush_chunk(buf))
+            buf = []
+        buf.append(ts)
+
+    if buf:
+        # Merge tiny remainder into previous chunk if it makes sense
+        if chunks and len(buf) < MIN_CHUNK:
+            prev_start, _, prev_text = chunks[-1]
+            merged_text = prev_text + " " + " ".join(w[2] for w in buf)
+            chunks[-1] = (prev_start, buf[-1][1], merged_text)
+        else:
+            chunks.append(_flush_chunk(buf))
+
+    return chunks
+
+
+def _flush_chunk(buf):
+    """Helper: convert a word-timestamp buffer into a (start, end, text) tuple."""
+    start = buf[0][0]
+    end = buf[-1][1]
+    text = " ".join(w[2] for w in buf)
+    return (start, end, text)
+
+
+def _build_ass_header(frame_width: int, frame_height: int) -> str:
+    """Build ASS file header with embedded styling."""
+    fontsize = max(18, int(frame_height * 0.042))
+    margin_v = max(20, int(frame_height * 0.04))
+    margin_h = max(20, int(frame_width * 0.06))
+    return (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {frame_width}\n"
+        f"PlayResY: {frame_height}\n"
+        "WrapStyle: 0\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,Arial,{fontsize},"
+        "&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        f"-1,0,0,0,100,100,0,0,1,2,1,2,{margin_h},{margin_h},{margin_v},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+
+
+def _write_timed_subtitle_ass(
+    text: str,
+    duration_seconds: float,
+    frame_width: int,
+    frame_height: int,
+    temp_dir: Path,
+    audio_path: Optional[Path] = None,
+) -> Optional[Path]:
+    """
+    Generate a native ASS subtitle file.
+    Strategy:
+      1) If audio_path is given, use Whisper forced-alignment for exact timing.
+      2) Fallback to proportional math timing if Whisper fails.
+    """
+    clean_text = sanitize_text(text)
+    if not clean_text:
+        return None
+
+    header = _build_ass_header(frame_width, frame_height)
+    events = []
+
+    # --- Strategy 1: Whisper forced-alignment (professional) ---
+    whisper_ok = False
+    if audio_path and audio_path.exists():
+        word_ts = _get_word_timestamps(audio_path)
+        if word_ts:
+            chunks = _group_words_into_chunks(word_ts, words_per_chunk=4)
+            if chunks:
+                # Professional padding: show subtitle slightly before speech
+                # starts and keep it slightly after speech ends.
+                PRE_PAD = 0.08   # seconds before first word
+                POST_PAD = 0.12  # seconds after last word
+                duration = max(float(duration_seconds or 0.0), 1.0)
+                padded = []
+                for start_s, end_s, chunk_text in chunks:
+                    s = max(0.0, start_s - PRE_PAD)
+                    e = min(duration, end_s + POST_PAD)
+                    padded.append((s, e, chunk_text))
+                
+                # Clamp overlaps: PRIORITIZE NEXT START.
+                # If current chunk ends after next chunk starts, trim current chunk.
+                # Do NOT delay the start of the next chunk.
+                for idx in range(len(padded) - 1):
+                    curr_end = padded[idx][1]
+                    next_start = padded[idx + 1][0]
+                    if curr_end > next_start:
+                        # Overlap! Trim current end to match next start
+                        padded[idx] = (padded[idx][0], next_start, padded[idx][2])
+                for start_s, end_s, chunk_text in padded:
+                    t_start = _format_ass_timestamp(start_s)
+                    t_end = _format_ass_timestamp(end_s)
+                    events.append(
+                        f"Dialogue: 0,{t_start},{t_end},Default,,0,0,0,,{chunk_text}"
+                    )
+                whisper_ok = True
+                print(f"[Subtitle] Whisper alignment OK: {len(padded)} chunks.")
+
+    # --- Strategy 2: Proportional math fallback ---
+    if not whisper_ok:
+        print("[Subtitle] Using proportional timing fallback.")
+        chunks = _split_subtitle_chunks(text, words_per_chunk=4)
+        if not chunks:
+            return None
+        duration = max(float(duration_seconds or 0.0), len(chunks) * 0.8)
+        gap = 0.05
+        usable = duration - gap * max(0, len(chunks) - 1)
+        usable = max(usable, len(chunks) * 0.5)
+        word_counts = [len(ch.split()) for ch in chunks]
+        total_words = max(1, sum(word_counts))
+        cursor = 0.0
+        for i, chunk in enumerate(chunks):
+            proportion = word_counts[i] / total_words
+            chunk_dur = max(0.6, usable * proportion)
+            start_s = cursor
+            end_s = start_s + chunk_dur
+            if i == len(chunks) - 1:
+                end_s = duration
+            t_start = _format_ass_timestamp(start_s)
+            t_end = _format_ass_timestamp(end_s)
+            events.append(f"Dialogue: 0,{t_start},{t_end},Default,,0,0,0,,{chunk}")
+            cursor = end_s + gap
+
+    if not events:
+        return None
+
+    content = header + "\n".join(events) + "\n"
+    path = temp_dir / f"subtitle_{uuid.uuid4()}.ass"
+    path.write_text(content, encoding="utf-8-sig")
     return path
 
 
 def _build_ass_subtitle_filter(subtitle_file: Optional[Path], frame_height: int) -> str:
+    """Build FFmpeg subtitles filter for a native ASS file (no force_style needed)."""
     if not subtitle_file or not subtitle_file.exists():
         return ""
     file_esc = _ffmpeg_escape_path(subtitle_file)
-    fontsize = max(26, int(frame_height * 0.055))
-    margin_v = max(28, int(frame_height * 0.045))
-    style = (
-        f"FontName=Arial,FontSize={fontsize},PrimaryColour=&H00FFFFFF,"
-        f"OutlineColour=&H00000000,BackColour=&H00000000,BorderStyle=1,"
-        f"Outline=2,Shadow=1,Alignment=2,MarginV={margin_v},WrapStyle=2"
-    )
-    style = style.replace("'", r"\'")
-    return f"subtitles='{file_esc}':force_style='{style}'"
+    return f"subtitles='{file_esc}'"
 
 
 def _build_subtitle_drawtext_filter(subtitle_file: Optional[Path], frame_height: int) -> str:
@@ -347,7 +552,7 @@ def create_video_clip_ffmpeg(
     subtitle_mode = "none"
     audio_seconds = get_media_duration_seconds(audio_path)
 
-    timed_subtitle_file = _write_timed_subtitle_srt(subtitle_text or "", audio_seconds, temp_dir)
+    timed_subtitle_file = _write_timed_subtitle_ass(subtitle_text or "", audio_seconds, width, height, temp_dir, audio_path=audio_path)
     if timed_subtitle_file:
         subtitle_files.append(timed_subtitle_file)
     subtitle_filter = _build_ass_subtitle_filter(timed_subtitle_file, height)

@@ -658,6 +658,24 @@ def install_piper_en_model_if_needed():
     _ensure_env_var_line("VIDEO_PIPER_MODEL", os.path.join("models", PIPER_EN_MODEL_NAME))
     _ensure_env_var_line("VIDEO_PIPER_CONFIG", os.path.join("models", PIPER_EN_CONFIG_NAME))
 
+
+def install_whisper_subtitle_model():
+    """Pre-download the faster_whisper tiny model used for subtitle alignment."""
+    print(f"\n{YELLOW}🎙️ Whisper tiny model (subtitle alignment) kontrol ediliyor...{RESET}")
+    try:
+        from faster_whisper import WhisperModel  # noqa: E402
+
+        # WhisperModel downloads and caches the model automatically.
+        # We instantiate once here so the first video doesn't have to wait.
+        print(f"{YELLOW}⏳ Whisper tiny model indiriliyor (ilk seferde ~39 MB)...{RESET}")
+        _model = WhisperModel("tiny", device="cpu", compute_type="int8")
+        del _model
+        print(f"{GREEN}✅ Whisper tiny model hazır (subtitle alignment).{RESET}")
+    except ImportError:
+        print(f"{YELLOW}⚠️ faster_whisper yüklü değil. pip install faster-whisper ile kurun.{RESET}")
+    except Exception as e:
+        print(f"{YELLOW}⚠️ Whisper model indirme hatası (video subtitle fallback kullanılacak): {e}{RESET}")
+
 def install_requirements():
     """Gerekli kütüphaneleri yükler."""
     print(f"{YELLOW}📦 Python kütüphaneleri yükleniyor (requirements.txt)...{RESET}")
@@ -885,6 +903,9 @@ if __name__ == "__main__":
 
     # 2.3 Piper English model (lessac-medium) for news video narration
     install_piper_en_model_if_needed()
+
+    # 2.4 Whisper tiny model for subtitle alignment
+    install_whisper_subtitle_model()
 
     # 3. Forge Kur
     install_forge()
