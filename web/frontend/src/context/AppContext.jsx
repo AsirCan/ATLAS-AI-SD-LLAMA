@@ -42,6 +42,9 @@ export function AppProvider({ children }) {
     const [agentStage, setAgentStage] = useState('idle');
     const [agentStatus, setAgentStatus] = useState('idle');
     const [agentCancelRequested, setAgentCancelRequested] = useState(false);
+    // Backend her uzun ise bir kimlik veriyor; ilerleme ve iptal bu kimlikle
+    // sorgulanir, boylece isler birbirinin durumunu ezmez.
+    const [agentJobId, setAgentJobId] = useState(null);
 
     // Instagram Config
     const [showInstaLogin, setShowInstaLogin] = useState(false);
@@ -115,6 +118,7 @@ export function AppProvider({ children }) {
         studioStep,
         isAgentRunning,
         agentStatus,
+        agentJobId,
         setAgentStatus,
         setAgentStatusText,
         setAgentPercent,
@@ -423,6 +427,7 @@ export function AppProvider({ children }) {
         // Agent
         agentStatusText, agentLogs, agentPercent, agentStage, agentStatus,
         agentCancelRequested, setAgentCancelRequested, isAgentRunning,
+        agentJobId, setAgentJobId,
         setAgentStatus, setAgentStatusText, setAgentPercent, setAgentStage,
         setAgentLogs,
         // Instagram Config

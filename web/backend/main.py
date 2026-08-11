@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -30,6 +31,7 @@ except ImportError:
 # API token dogrulamasi. Import edilemezse koruma acilamaz; bunu sessizce
 # gecmek yerine acikca belirtiyoruz ki guvenlik durumu gorunur olsun.
 try:
+    from core.runtime import jobs
     from core.runtime.api_auth import HEADER_NAME as AUTH_HEADER_NAME
     from core.runtime.api_auth import is_authorized, read_api_token
 except ImportError as e:
@@ -81,7 +83,8 @@ def setup_safe_piper():
 
         # 2. Define safe temp path
         # Use user's temp dir which is usually safe (e.g. C:\Users\User\AppData\Local\Temp)
-        safe_dir = os.path.join(os.environ["TEMP"], "atlas_safe_piper")
+        # tempfile.gettempdir(): os.environ["TEMP"] POSIX'te KeyError firlatiyordu.
+        safe_dir = os.path.join(tempfile.gettempdir(), "atlas_safe_piper")
         SAFE_PIPER_DIR = safe_dir
 
         # 3. Clean and Copy Piper Binaries
@@ -364,65 +367,60 @@ def news_generate_endpoint():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Global Progress State
-VIDEO_PROGRESS = {"status": "idle", "percent": 0, "current_task": "", "result": None, "error": None}
-
-CAROUSEL_PROGRESS = {
-    "status": "idle",
-    "percent": 0,
-    "current_task": "",
-    "result": None,  # { images: [], caption: "" }
-    "error": None,
-}
+# Uzun isler (ajan / carousel / video) job-ID tabanli kayit defterinde izlenir.
+# Global sozluk kullanilmaz: ayni anda iki is baslatildiginda durumlar
+# birbirinin ustune yaziyordu (bkz. core/runtime/jobs.py).
 
 
-def update_video_progress(task_name, percent=None):
-    print(f"Video Progress: {task_name}")
-    VIDEO_PROGRESS["status"] = "generating"
-    VIDEO_PROGRESS["current_task"] = task_name
-    if percent is not None:
-        try:
-            VIDEO_PROGRESS["percent"] = max(0, min(100, int(percent)))
-        except Exception:
-            pass
+def _start_job(kind: str):
+    """
+    Yeni is olusturur. Baska bir is devam ediyorsa (409) hata sozlugu doner.
+
+    "Ayni anda tek GPU isi" kurali burada zorlanir; UI kilidine guvenilmez.
+    """
+    try:
+        return jobs.registry.create(kind), None
+    except jobs.JobConflict as conflict:
+        return None, {
+            "success": False,
+            "error": str(conflict),
+            "active_job": conflict.active_kind,
+            "active_job_id": conflict.active_job_id,
+        }
 
 
 @app.get("/api/news/video_progress")
-def video_progress_endpoint():
-    return VIDEO_PROGRESS
+def video_progress_endpoint(job_id: str = None):
+    return jobs.registry.snapshot(job_id, kind="video")
 
 
-def run_video_generation_task():
-    global VIDEO_PROGRESS
-    VIDEO_PROGRESS = {
-        "status": "generating",
-        "percent": 0,
-        "current_task": "Haberler taranıyor...",
-        "result": None,
-        "error": None,
-    }
+def run_video_generation_task(job_id: str):
+    job = jobs.registry.get(job_id)
+    if job is None:
+        return
+
+    job.set_stage("generating", 0, "Haberler taranıyor...")
 
     try:
         from video_generator import process_daily_news_video
 
-        # Define callback to update global state
         def progress_callback(payload):
             if isinstance(payload, dict):
                 task = payload.get("task") or payload.get("message") or ""
                 percent = payload.get("percent")
                 if task:
-                    VIDEO_PROGRESS["current_task"] = str(task)
-                    print(f"Progress Update: {task}")
+                    job.current_task = str(task)
+                    job.log(str(task))
                 if percent is not None:
                     try:
-                        VIDEO_PROGRESS["percent"] = max(0, min(100, int(percent)))
-                    except Exception:
+                        job.percent = max(0, min(100, int(percent)))
+                    except (TypeError, ValueError):
                         pass
                 return
 
             msg = str(payload)
-            VIDEO_PROGRESS["current_task"] = msg
-            print(f"Progress Update: {msg}")
+            job.current_task = msg
+            job.log(msg)
 
         success, result = process_daily_news_video(progress_callback)
 
@@ -431,100 +429,47 @@ def run_video_generation_task():
             # We need relative path from generated_videos root
             video_rel_path = os.path.relpath(result, str(VIDEOS_DIR))
             video_url = f"http://127.0.0.1:8000/videos/{video_rel_path}".replace("\\", "/")
-
-            VIDEO_PROGRESS["status"] = "done"
-            VIDEO_PROGRESS["percent"] = 100
-            VIDEO_PROGRESS["result"] = video_url
-            VIDEO_PROGRESS["current_task"] = "Tamamlandı!"
+            job.finish("done", task="Tamamlandı!", result=video_url)
         else:
-            VIDEO_PROGRESS["status"] = "error"
-            VIDEO_PROGRESS["error"] = result
-            VIDEO_PROGRESS["current_task"] = f"Hata: {result}"
+            job.finish("error", task=f"Hata: {result}", error=str(result))
 
     except Exception as e:
         print(f"Background Video Gen Error: {e}")
-        VIDEO_PROGRESS["status"] = "error"
-        VIDEO_PROGRESS["error"] = str(e)
-        VIDEO_PROGRESS["current_task"] = "Kritik Hata"
+        job.finish("error", task="Kritik Hata", error=str(e))
 
 
 @app.post("/api/news/video_generate")
 async def news_video_generate_endpoint(background_tasks: BackgroundTasks):
-    active_job = _active_long_job()
-    if active_job:
-        if active_job == "video":
-            return {"success": False, "error": "Video already generating."}
-        return {
-            "success": False,
-            "error": f"{_job_display_name(active_job)} is running. Wait until it finishes.",
-            "active_job": active_job,
-        }
+    job, conflict = _start_job("video")
+    if conflict:
+        return conflict
 
-    background_tasks.add_task(run_video_generation_task)
-    return {"success": True, "message": "Video generation started in background"}
+    background_tasks.add_task(run_video_generation_task, job.id)
+    return {"success": True, "job_id": job.id, "message": "Video generation started in background"}
 
 
 # --- AGENT LOGIC ---
 
-AGENT_PROGRESS = {
-    "status": "idle",
-    "percent": 0,
-    "stage": "idle",
-    "current_task": "",
-    "result": None,
-    "error": None,
-    "cancel_requested": False,
-}
+def run_agent_task(job_id: str, live_mode: bool = False):
+    job = jobs.registry.get(job_id)
+    if job is None:
+        return
 
-
-def _active_long_job():
-    """Return currently running long task name: agent|carousel|video or None."""
-    if AGENT_PROGRESS.get("status") == "running":
-        return "agent"
-    if CAROUSEL_PROGRESS.get("status") == "generating":
-        return "carousel"
-    if VIDEO_PROGRESS.get("status") == "generating":
-        return "video"
-    return None
-
-
-def _job_display_name(job: str) -> str:
-    return {
-        "agent": "Otonom Ajan",
-        "carousel": "Carousel",
-        "video": "Video",
-    }.get(job, job)
-
-
-def run_agent_task(live_mode: bool = False):
-    global AGENT_PROGRESS
-    AGENT_PROGRESS = {
-        "status": "running",
-        "percent": 0,
-        "stage": "starting",
-        "current_task": "Agent Başlatılıyor...",
-        "result": None,
-        "error": None,
-        "cancel_requested": False,
-    }
+    job.set_stage("starting", 0, "Agent Başlatılıyor...")
 
     try:
         from core.pipeline.orchestrator import Orchestrator
         from core.runtime.system_check import ensure_ollama_running, ensure_sd_running
 
         def set_stage(stage: str, percent: int, task: str):
-            AGENT_PROGRESS["stage"] = stage
-            AGENT_PROGRESS["percent"] = percent
-            AGENT_PROGRESS["current_task"] = task
+            job.set_stage(stage, percent, task)
 
         def is_cancelled() -> bool:
-            return bool(AGENT_PROGRESS.get("cancel_requested"))
+            return job.cancel_requested
 
         def cancel_guard(where: str) -> bool:
             if is_cancelled():
-                AGENT_PROGRESS["status"] = "cancelled"
-                AGENT_PROGRESS["stage"] = "cancelled"
-                AGENT_PROGRESS["current_task"] = f"İptal edildi ({where})."
+                job.finish("cancelled", task=f"İptal edildi ({where}).")
                 return True
             return False
 
@@ -551,40 +496,27 @@ def run_agent_task(live_mode: bool = False):
         orchestrator = Orchestrator(dry_run=dry_run)
         orchestrator.set_cancel_checker(is_cancelled)
 
-        # Capture Logs
-        import datetime
+        # Orchestrator adim loglarini stage/percent'e esler.
+        STEP_STAGES = {
+            "Step 1/6": ("news", 20),
+            "Step 2/6": ("risk", 35),
+            "Step 3/6": ("visual", 55),
+            "Step 4/6": ("caption", 70),
+            "Step 5/6": ("schedule", 85),
+            "Step 6/6": ("publish", 95),
+        }
 
         def log_capture(msg):
-            # Update global state logs
-            if "logs" not in AGENT_PROGRESS:
-                AGENT_PROGRESS["logs"] = []
+            job.log(msg)
+            # Son satiri guncel gorev olarak goster (UI dostu)
+            job.current_task = msg
 
-            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-            AGENT_PROGRESS["logs"].append(f"[{timestamp}] {msg}")
-
-            # Always show last line as current task (UI friendly)
-            AGENT_PROGRESS["current_task"] = msg
-
-            # Map orchestrator step logs to stage/percent for a clear progress bar
             if "[Orchestrator]" in msg:
-                if "Step 1/6" in msg:
-                    AGENT_PROGRESS["stage"] = "news"
-                    AGENT_PROGRESS["percent"] = 20
-                elif "Step 2/6" in msg:
-                    AGENT_PROGRESS["stage"] = "risk"
-                    AGENT_PROGRESS["percent"] = 35
-                elif "Step 3/6" in msg:
-                    AGENT_PROGRESS["stage"] = "visual"
-                    AGENT_PROGRESS["percent"] = 55
-                elif "Step 4/6" in msg:
-                    AGENT_PROGRESS["stage"] = "caption"
-                    AGENT_PROGRESS["percent"] = 70
-                elif "Step 5/6" in msg:
-                    AGENT_PROGRESS["stage"] = "schedule"
-                    AGENT_PROGRESS["percent"] = 85
-                elif "Step 6/6" in msg:
-                    AGENT_PROGRESS["stage"] = "publish"
-                    AGENT_PROGRESS["percent"] = 95
+                for marker, (stage, percent) in STEP_STAGES.items():
+                    if marker in msg:
+                        job.stage = stage
+                        job.percent = percent
+                        break
 
         orchestrator.set_logger(log_capture)
 
@@ -597,113 +529,99 @@ def run_agent_task(live_mode: bool = False):
 
         # If cancel was requested at any time, surface it as a cancelled status
         if is_cancelled() or (final_state.upload_status and final_state.upload_status.get("message") == "Cancelled"):
-            AGENT_PROGRESS["status"] = "cancelled"
-            AGENT_PROGRESS["stage"] = "cancelled"
-            AGENT_PROGRESS["current_task"] = "İptal edildi."
+            job.finish("cancelled", task="İptal edildi.")
             return
 
         if final_state.upload_status and final_state.upload_status.get("success"):
-            AGENT_PROGRESS["status"] = "done"
-            AGENT_PROGRESS["stage"] = "done"
-            AGENT_PROGRESS["percent"] = 100
-            AGENT_PROGRESS["current_task"] = "İşlem başarıyla tamamlandı."
-            AGENT_PROGRESS["result"] = final_state.upload_status
+            job.finish(
+                "done",
+                task="İşlem başarıyla tamamlandı.",
+                result=final_state.upload_status,
+            )
         elif dry_run:
-            AGENT_PROGRESS["status"] = "done"
-            AGENT_PROGRESS["stage"] = "done"
-            AGENT_PROGRESS["percent"] = 100
-            AGENT_PROGRESS["current_task"] = "Test Tamamlandı (Dry Run)"
-            # Return generated images if available
-            if final_state.generated_images:
-                AGENT_PROGRESS["result"] = {"images": final_state.generated_images}
+            job.finish(
+                "done",
+                task="Test Tamamlandı (Dry Run)",
+                result={"images": final_state.generated_images} if final_state.generated_images else None,
+            )
         else:
-            AGENT_PROGRESS["status"] = "error"
-            AGENT_PROGRESS["stage"] = "error"
             # If upload status exists, bubble the real reason to UI
-            if final_state.upload_status and final_state.upload_status.get("message"):
-                AGENT_PROGRESS["error"] = final_state.upload_status.get("message")
-                AGENT_PROGRESS["current_task"] = f"Hata: {final_state.upload_status.get('message')}"
+            reason = (final_state.upload_status or {}).get("message")
+            if reason:
+                job.finish("error", task=f"Hata: {reason}", error=reason)
             else:
-                AGENT_PROGRESS["error"] = "Pipeline bir noktada durdu veya upload başarısız."
-                AGENT_PROGRESS["current_task"] = "İşlem tamamlanamadı."
+                job.finish(
+                    "error",
+                    task="İşlem tamamlanamadı.",
+                    error="Pipeline bir noktada durdu veya upload başarısız.",
+                )
 
     except Exception as e:
         print(f"Agent Error: {e}")
-        AGENT_PROGRESS["status"] = "error"
-        AGENT_PROGRESS["stage"] = "error"
-        AGENT_PROGRESS["error"] = str(e)
-        AGENT_PROGRESS["current_task"] = "Kritik Hata"
+        job.finish("error", task="Kritik Hata", error=str(e))
+
+
+def _interrupt_stable_diffusion():
+    """Bloke eden bir SD cizimini hizlica uyandirmak icin en iyi cabayla dener."""
+    try:
+        requests.post("http://127.0.0.1:7860/sdapi/v1/interrupt", timeout=2)
+    except requests.RequestException:
+        pass
 
 
 @app.post("/api/agent/cancel")
-async def cancel_agent_endpoint():
+@app.post("/api/agent/cancel/{job_id}")
+async def cancel_agent_endpoint(job_id: str = None):
     """
     Cooperative cancel:
     - Sets a flag checked by the background job between steps.
     - If SD generation is in progress, also sends Forge interrupt for faster stop.
+
+    job_id verilmezse en son ajan isi iptal edilir (geriye donuk uyumluluk).
     """
-    if AGENT_PROGRESS.get("status") != "running":
+    job = jobs.registry.request_cancel(job_id, kind="agent")
+    if job is None:
         return {"success": False, "error": "Agent is not running."}
 
-    AGENT_PROGRESS["cancel_requested"] = True
-    AGENT_PROGRESS["stage"] = "cancelling"
-    AGENT_PROGRESS["current_task"] = "Cancel requested. Waiting for safe stop..."
-
-    try:
-        # Best-effort: wake up a blocking SD generation quickly.
-        requests.post("http://127.0.0.1:7860/sdapi/v1/interrupt", timeout=2)
-    except Exception:
-        pass
-
-    return {"success": True, "message": "Cancel requested"}
+    _interrupt_stable_diffusion()
+    return {"success": True, "job_id": job.id, "message": "Cancel requested"}
 
 
 @app.post("/api/agent/run")
 async def run_agent_endpoint(background_tasks: BackgroundTasks, live: bool = False):
-    active_job = _active_long_job()
-    if active_job:
-        if active_job == "agent":
-            return {"success": False, "error": "Ajan zaten calisiyor!"}
-        return {
-            "success": False,
-            "error": f"{_job_display_name(active_job)} calisiyor. Bitmesini bekle.",
-            "active_job": active_job,
-        }
+    job, conflict = _start_job("agent")
+    if conflict:
+        return conflict
 
-    background_tasks.add_task(run_agent_task, live_mode=live)
-    return {"success": True, "message": "Autonomous Agent started"}
+    background_tasks.add_task(run_agent_task, job.id, live_mode=live)
+    return {"success": True, "job_id": job.id, "message": "Autonomous Agent started"}
 
 
 @app.get("/api/agent/progress")
-def agent_progress_endpoint():
-    return AGENT_PROGRESS
+@app.get("/api/agent/progress/{job_id}")
+def agent_progress_endpoint(job_id: str = None):
+    """job_id verilmezse en son ajan isi dondurulur (geriye donuk uyumluluk)."""
+    return jobs.registry.snapshot(job_id, kind="agent")
 
 
 # --- CAROUSEL LOGIC ---
 
 
-def run_carousel_generation_task():
-    global CAROUSEL_PROGRESS
-    CAROUSEL_PROGRESS = {
-        "status": "generating",
-        "percent": 0,
-        "current_task": "Gündem taranıyor...",
-        "result": None,
-        "error": None,
-    }
+def run_carousel_generation_task(job_id: str):
+    job = jobs.registry.get(job_id)
+    if job is None:
+        return
+
+    job.set_stage("generating", 0, "Gündem taranıyor...")
 
     try:
         from core.content.carousel_agent import generate_carousel_content
 
         def progress_callback(msg):
-            # Eğer "LAYER_UPDATE:" ile başlıyorsa özel işlem yapabiliriz
-            if msg.startswith("LAYER_UPDATE:"):
-                clean_msg = msg.replace("LAYER_UPDATE:", "")
-                CAROUSEL_PROGRESS["current_task"] = clean_msg
-                # İlerlemeyi resim sayısına göre artırabiliriz ama şimdilik metin yeterli
-            else:
-                CAROUSEL_PROGRESS["current_task"] = msg
-            print(f"Carousel Progress: {msg}")
+            # "LAYER_UPDATE:" oneki UI icin temizlenir
+            clean_msg = msg.replace("LAYER_UPDATE:", "") if msg.startswith("LAYER_UPDATE:") else msg
+            job.current_task = clean_msg
+            job.log(clean_msg)
 
         success, images, caption = generate_carousel_content(progress_callback)
 
@@ -722,39 +640,33 @@ def run_carousel_generation_task():
                     }
                 )
 
-            CAROUSEL_PROGRESS["status"] = "done"
-            CAROUSEL_PROGRESS["result"] = {"images": image_urls, "caption": caption}
-            CAROUSEL_PROGRESS["current_task"] = "Tamamlandı!"
+            job.finish(
+                "done",
+                task="Tamamlandı!",
+                result={"images": image_urls, "caption": caption},
+            )
         else:
-            CAROUSEL_PROGRESS["status"] = "error"
-            CAROUSEL_PROGRESS["error"] = caption  # Hata mesajı caption içinde dönüyor agent'ta
-            CAROUSEL_PROGRESS["current_task"] = "Hata oluştu."
+            # Hata mesajı caption içinde dönüyor agent'ta
+            job.finish("error", task="Hata oluştu.", error=str(caption))
 
     except Exception as e:
         print(f"Carousel Gen Error: {e}")
-        CAROUSEL_PROGRESS["status"] = "error"
-        CAROUSEL_PROGRESS["error"] = str(e)
+        job.finish("error", task="Kritik Hata", error=str(e))
 
 
 @app.post("/api/carousel/generate")
 async def carousel_generate_endpoint(background_tasks: BackgroundTasks):
-    active_job = _active_long_job()
-    if active_job:
-        if active_job == "carousel":
-            return {"success": False, "error": "Carousel zaten uretiliyor!"}
-        return {
-            "success": False,
-            "error": f"{_job_display_name(active_job)} calisiyor. Bitmesini bekle.",
-            "active_job": active_job,
-        }
+    job, conflict = _start_job("carousel")
+    if conflict:
+        return conflict
 
-    background_tasks.add_task(run_carousel_generation_task)
-    return {"success": True, "message": "Carousel generation started"}
+    background_tasks.add_task(run_carousel_generation_task, job.id)
+    return {"success": True, "job_id": job.id, "message": "Carousel generation started"}
 
 
 @app.get("/api/carousel/progress")
-def carousel_progress_endpoint():
-    return CAROUSEL_PROGRESS
+def carousel_progress_endpoint(job_id: str = None):
+    return jobs.registry.snapshot(job_id, kind="carousel")
 
 
 @app.post("/api/instagram/upload")

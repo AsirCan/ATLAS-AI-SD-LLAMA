@@ -6,6 +6,7 @@ export function useAgentPoller({
     studioStep,
     isAgentRunning,
     agentStatus,
+    agentJobId,
     setAgentStatus,
     setAgentStatusText,
     setAgentPercent,
@@ -23,7 +24,9 @@ export function useAgentPoller({
 
         const tick = async () => {
             try {
-                const p = await api.checkAgentProgress();
+                // Kimlik varsa o isi sorgula; boylece baska bir isin durumu
+                // yanlislikla bu ekrana yansimaz.
+                const p = await api.checkAgentProgress(agentJobId);
 
                 if (p?.status) setAgentStatus(p.status);
                 if (p?.current_task) setAgentStatusText(p.current_task);
@@ -46,5 +49,5 @@ export function useAgentPoller({
         }
 
         return () => clearInterval(interval);
-    }, [appMode, studioStep, isAgentRunning, agentStatus]);
+    }, [appMode, studioStep, isAgentRunning, agentStatus, agentJobId]);
 }

@@ -13,6 +13,7 @@ export default function StudioPage() {
         setShowInstaLogin, isAgentRunning,
         agentStatusText, agentLogs, agentPercent, agentStage,
         agentCancelRequested, setAgentCancelRequested,
+        agentJobId, setAgentJobId,
         addToGallery, setAgentStatus, setAgentStatusText: setAgentStatusTextCtx,
     } = useAppContext();
 
@@ -115,6 +116,8 @@ export default function StudioPage() {
                                         setStudioStep('idle');
                                         return;
                                     }
+                                    // Bu kosuyu kendi kimligiyle izle
+                                    setAgentJobId(res.job_id || null);
                                 } catch (err) {
                                     alert('Bağlantı Hatası');
                                     setStudioStep('idle');
@@ -179,7 +182,7 @@ export default function StudioPage() {
                                     const ok = window.confirm("Ajanı iptal etmek istiyor musun?\n\nNot: Eğer şu an görsel çiziyorsa, güvenli durdurma adım bitince gerçekleşir.");
                                     if (!ok) return;
                                     setAgentCancelRequested(true);
-                                    await api.cancelAgent();
+                                    await api.cancelAgent(agentJobId);
                                 }}
                                 disabled={!isAgentRunning || agentCancelRequested}
                                 className={`px-4 py-2 rounded-xl font-bold border transition-all ${agentCancelRequested
