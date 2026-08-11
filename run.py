@@ -251,6 +251,15 @@ def run_app():
 
 
 if __name__ == "__main__":
+    # Proje su an yalnizca Windows'ta calisiyor (bkz. issue #9).
+    # POSIX'te yarim kurulum birakmak yerine anlasilir bir mesajla cikiyoruz.
+    try:
+        from core.runtime.platform_support import require_windows
+
+        require_windows()
+    except ImportError:
+        pass
+
     setup_utf8_console()
 
     import argparse

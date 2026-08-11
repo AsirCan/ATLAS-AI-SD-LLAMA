@@ -67,6 +67,11 @@ Notlar:
 - Graph API alanları doluysa `python run.py` tunnel helper'ı otomatik başlatır ve `PUBLIC_BASE_URL` günceller (`AUTO_TUNNEL=1`).
 
 ### Gereksinimler
+> ⚠️ **Bu proje şu an yalnızca Windows'ta çalışır.** Forge kurulumu `C:\Forge`
+> yolunu varsayıyor, TTS için `piper.exe` ve tünel için `cloudflared.exe`
+> bekleniyor, kurulum `winget` kullanıyor. Linux/macOS'ta `python run.py`
+> açıklayıcı bir mesajla çıkar. Takip: [#9](https://github.com/AsirCan/ATLAS-AI-SD-LLAMA/issues/9)
+
 - **Python**: 3.10 – 3.12 (3.13+ henüz test edilmedi)
 - **Node.js**: 18+ (frontend için)
 - **Ollama**: `https://ollama.com/`

@@ -236,9 +236,11 @@ export const api = {
         }
     },
 
-    checkAgentProgress: async () => {
+    // jobId verilirse o isin durumu, verilmezse en son ajan isi dondurulur.
+    checkAgentProgress: async (jobId = null) => {
         try {
-            const response = await client.get('/agent/progress');
+            const path = jobId ? `/agent/progress/${jobId}` : '/agent/progress';
+            const response = await client.get(path);
             return response.data;
         } catch (error) {
             console.error('Agent Progress Error:', error);
@@ -267,9 +269,10 @@ export const api = {
         }
     },
 
-    cancelAgent: async () => {
+    cancelAgent: async (jobId = null) => {
         try {
-            const response = await client.post('/agent/cancel');
+            const path = jobId ? `/agent/cancel/${jobId}` : '/agent/cancel';
+            const response = await client.post(path);
             return response.data;
         } catch (error) {
             console.error('Agent Cancel Error:', error);
