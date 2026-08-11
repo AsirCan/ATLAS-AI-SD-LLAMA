@@ -2,11 +2,35 @@ import axios from 'axios';
 
 const API_BASE_URL = 'http://127.0.0.1:8000/api';
 
+// Backend /api/* uclarini paylasimli token ile koruyor.
+// Token'i run.py uretip web/frontend/.env.local icine yaziyor.
+const API_TOKEN = import.meta.env.VITE_ATLAS_API_TOKEN || '';
+
 // Create axios instance with timeout
 const client = axios.create({
     baseURL: API_BASE_URL,
     timeout: 300000, // 5 minutes (for image gen)
 });
+
+client.interceptors.request.use((config) => {
+    if (API_TOKEN) {
+        config.headers['X-Atlas-Token'] = API_TOKEN;
+    }
+    return config;
+});
+
+client.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error?.response?.status === 401) {
+            console.error(
+                'API token gecersiz. Backend ve frontend farkli token kullaniyor olabilir. ' +
+                'Cozum: uygulamayi kapatip "python run.py" ile yeniden baslatin.'
+            );
+        }
+        return Promise.reject(error);
+    }
+);
 
 export const api = {
     // Chat with LLM

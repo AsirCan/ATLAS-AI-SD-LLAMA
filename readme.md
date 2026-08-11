@@ -107,12 +107,16 @@ Bu proje Instagram yüklemede öncelikle **Graph API** kullanır (daha stabil). 
 
 Not:
 - `PUBLIC_BASE_URL` yoksa Graph API ile upload çalışmaz.
-- Graph API alanları boşsa sistem eski yöntem (`instagrapi`) ile devam eder.
+- Graph API alanları boşsa sistem **durur ve eksikleri bildirir**; eski yönteme (`instagrapi`)
+  otomatik geçmez (bkz. Güvenlik modeli).
 
 ### Hangi giriş yöntemini kullanmalıyım?
-- **Öncelik:** Graph API (`FB_*`, `IG_USER_ID`, `PUBLIC_BASE_URL` doluysa)
-- **Legacy Login:** Sadece geçici/backup kullanım için (`INSTA_USERNAME` + UI'den şifre kaydet)
-- Graph API aktifken UI'de Legacy Login yapmak zorunda değilsin.
+- **Öncelik (ve tek desteklenen yol):** Graph API (`FB_*`, `IG_USER_ID`, `PUBLIC_BASE_URL` doluysa)
+- **Legacy (`instagrapi`): varsayılan olarak KAPALI.**
+  `instagrapi` Instagram'ın resmi olmayan mobil API'sini taklit eder; kullanım şartlarına
+  aykırıdır ve hesabın kısıtlanmasına/kapatılmasına yol açabilir.
+  Graph API eksikse sistem **sessizce bu yola düşmez** — hangi alanların eksik olduğunu söyleyip durur.
+  Riski bilerek kabul ediyorsan `.env` içine `ALLOW_LEGACY_INSTAGRAPI=1` ekle.
 
 ### Yeni kuran biri için 1 dakikalık kontrol listesi
 `.env` içinde şu alanlar **boş olmamalı**:
@@ -127,6 +131,8 @@ PUBLIC_BASE_URL=
 IMGBB_API_KEY= # opsiyonel ama onerilir
 IG_GRAPH_VERSION=v24.0
 ```
+
+`ATLAS_API_TOKEN` alanini elle doldurmana gerek yok — `python run.py` uretir.
 
 Hızlı doğrulama (Explorer):
 - `/me/accounts?fields=id,name`
@@ -267,12 +273,42 @@ Orchestrator aşağıdaki sırayla ilerler (her adım loglanır ve UI’ye yans�
 - Hata: `status=error` + `error` alanı
 
 
+## Güvenlik modeli
+
+Ana backend (`web/backend/main.py`, port 8000) **her zaman yalnızca `127.0.0.1`'e bağlanır ve
+asla tünellenmez.** Instagram Graph API'nin görseli indirebilmesi için gereken public erişim,
+ayrı ve salt-okunur bir servisle sağlanır:
+
+| Servis | Port | Dışarı açık | İçerik |
+|---|---|---|---|
+| `web/backend/main.py` | 8000 | ❌ Hayır | Tüm `/api/*` uçları, LLM, SD, ajan |
+| `web/backend/image_server.py` | 8010 | ✅ Evet (tünel) | Yalnızca `generated_images/`, sadece GET |
+
+Ek katmanlar:
+
+- **API token:** `/api/*` uçları `X-Atlas-Token` başlığı ister. Token `.env` içinde
+  `ATLAS_API_TOKEN` olarak tutulur; `python run.py` ilk çalıştırmada üretir ve frontend'e
+  `web/frontend/.env.local` üzerinden otomatik aktarır — elle bir şey kopyalaman gerekmez.
+- **CORS:** `*` yerine whitelist. Varsayılan `http://127.0.0.1:5173` ve `http://localhost:5173`;
+  `ALLOWED_ORIGINS` ile değiştirilebilir.
+- **Sır sızıntısı yok:** `GET /api/imgbb/config` anahtarı geri döndürmez; yalnızca kurulu olup
+  olmadığını ve son 4 haneyi verir. UI'daki alan yalnız-yazılırdır.
+- **Legacy upload kapalı:** bkz. "Hangi giriş yöntemini kullanmalıyım?".
+
+> Not: Tünel açıkken `generated_images/` altındaki tüm görseller URL'i bilen herkese açıktır.
+> Bu, Graph API akışının doğası gereğidir — Instagram görseli internetten kendisi indirir.
+
+### 401 alıyorsan
+Backend ile frontend farklı token kullanıyordur. Uygulamayı kapatıp `python run.py` ile
+yeniden başlat; token her açılışta senkronlanır.
+
 ## Instagram Upload Algoritmasi
 
 Bu repo artik varsayilan olarak **Graph API + auto tunnel** akisina gore calisir.
 
-1. `python run.py` calisir.
-2. Graph alanlari doluysa (`FB_*`, `IG_USER_ID`) tunnel otomatik baslar (`tools/setup_tunnel.py`).
+1. `python run.py` calisir ve `ATLAS_API_TOKEN` hazirlanir.
+2. Graph alanlari doluysa (`FB_*`, `IG_USER_ID`) once salt-okunur gorsel sunucusu (port 8010),
+   ardindan tunnel baslar (`tools/setup_tunnel.py`). Tunnel **yalnizca 8010'a** baglanir.
 3. Tunnel URL `.env` icine `PUBLIC_BASE_URL` olarak yazilir.
 4. Studio > Instagram Baglanti Merkezi uzerinden alanlar kaydedilir, token durumu kontrol edilir.
 5. Upload sirasinda backend:
@@ -281,7 +317,8 @@ Bu repo artik varsayilan olarak **Graph API + auto tunnel** akisina gore calisir
    - local dosya yolunu public URL'e cevirir (`PUBLIC_BASE_URL/images/...`),
    - `/{IG_USER_ID}/media` ve `/{IG_USER_ID}/media_publish` adimlarini cagirir.
 6. Tunnel URL fetch sorunu olursa fallback olarak gecici public host denemesi yapilir (IMGBB_API_KEY varsa once ImgBB kullanilir).
-7. Graph alanlari eksikse legacy `instagrapi` yedek yol olarak kullanilir.
+7. Graph alanlari eksikse islem **durur** ve eksik alanlar bildirilir.
+   Legacy `instagrapi` yoluna otomatik dusulmez (`ALLOW_LEGACY_INSTAGRAPI=1` gerekir).
 
 ## Yeni Endpointler (Guncel)
 

@@ -68,6 +68,7 @@ export function AppProvider({ children }) {
     });
     const [imgbbApiKey, setImgbbApiKey] = useState('');
     const [imgbbConfigured, setImgbbConfigured] = useState(false);
+    const [imgbbMasked, setImgbbMasked] = useState('');
 
     // Draw Modal
     const [showDrawModal, setShowDrawModal] = useState(false);
@@ -195,12 +196,14 @@ export function AppProvider({ children }) {
         });
     };
 
+    // Backend API key'i geri dondurmuyor (guvenlik). Yalnizca kurulu olup
+    // olmadigi ve maskelenmis hali geliyor; alan yalniz-yazilir calisiyor.
     const refreshImgBBConfig = async () => {
         const res = await api.getImgBBConfig();
         if (res?.success) {
-            const key = (res.imgbb_api_key || '').trim();
-            setImgbbApiKey(key);
-            setImgbbConfigured(!!key);
+            setImgbbConfigured(!!res.configured);
+            setImgbbMasked(res.masked || '');
+            setImgbbApiKey('');
         }
     };
 
@@ -232,7 +235,12 @@ export function AppProvider({ children }) {
     };
 
     const saveImgBBConfig = async () => {
-        const res = await api.saveImgBBConfig(imgbbApiKey.trim());
+        const value = imgbbApiKey.trim();
+        if (!value) {
+            alert('Once ImgBB API key girin.');
+            return;
+        }
+        const res = await api.saveImgBBConfig(value);
         if (res?.success) {
             await refreshImgBBConfig();
             alert('ImgBB API key .env dosyasina kaydedildi.');
@@ -421,7 +429,7 @@ export function AppProvider({ children }) {
         showInstaLogin, setShowInstaLogin, instaUser, setInstaUser,
         instaPass, setInstaPass, instaAuthTab, setInstaAuthTab,
         envCopied, graphConfig, setGraphConfig, graphStatus, graphTokenStatus,
-        imgbbApiKey, setImgbbApiKey, imgbbConfigured,
+        imgbbApiKey, setImgbbApiKey, imgbbConfigured, imgbbMasked,
         graphEnvTemplate, copyGraphEnvTemplate, closeInstaModal,
         refreshGraphStatus, refreshGraphTokenStatus, refreshImgBBConfig,
         tokenStatusText, saveGraphConfig, saveImgBBConfig,
