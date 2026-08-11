@@ -1,5 +1,8 @@
 # Environments
 .env
+.env.local
+# run.py tarafindan uretilir, API token icerir
+web/frontend/.env.local
 .venv
 env/
 venv/
@@ -66,7 +69,10 @@ models/
 # Session Data & Security
 insta_session.json
 
-tools/
+# tools/ klasorunun KENDISI commitli kalir (setup_tunnel.py gerekli).
+# Yalnizca indirilen binary'ler haric tutulur.
+tools/cloudflared/
+tools/piper/
 
 # Data
 *.db

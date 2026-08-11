@@ -21,6 +21,10 @@ RESET = "\033[0m"
 
 APP_URL = "http://127.0.0.1:5173"
 ENV_FILE = Path(".env")
+TUNNEL_SCRIPT = Path("tools") / "setup_tunnel.py"
+IMAGE_SERVER_SCRIPT = Path("web") / "backend" / "image_server.py"
+FRONTEND_ENV_FILE = Path("web") / "frontend" / ".env.local"
+IMAGE_SERVER_PORT = 8010
 
 def setup_utf8_console():
     """Force UTF-8 output on Windows terminals to avoid mojibake."""
@@ -84,6 +88,71 @@ def wait_for_public_base_url(timeout_sec=20):
         time.sleep(0.5)
     return ""
 
+def sync_frontend_token(token: str):
+    """
+    Backend'in bekledigi API token'ini frontend'e aktarir.
+
+    Vite yalnizca VITE_ ile baslayan degiskenleri istemciye acar. Token her
+    calistirmada .env.local'a yazilir; boylece kullanicinin elle bir sey
+    kopyalamasi gerekmez.
+    """
+    if not token:
+        return
+    try:
+        FRONTEND_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+        content = (
+            "# Bu dosya run.py tarafindan otomatik uretilir. Elle duzenlemeyin.\n"
+            f"VITE_ATLAS_API_TOKEN={token}\n"
+        )
+        if FRONTEND_ENV_FILE.exists() and FRONTEND_ENV_FILE.read_text(encoding="utf-8") == content:
+            return
+        FRONTEND_ENV_FILE.write_text(content, encoding="utf-8")
+    except Exception as e:
+        print(f"{YELLOW}⚠️ Frontend token dosyasi yazilamadi: {e}{RESET}")
+        print(f"{YELLOW}   Arayuz API'ye baglanamayabilir.{RESET}")
+
+
+def start_image_server(processes):
+    """
+    Tunnel icin salt-okunur gorsel sunucusunu baslatir.
+
+    Tunnel bu servise baglanir; ana backend (8000) disariya hic acilmaz.
+    """
+    if not IMAGE_SERVER_SCRIPT.exists():
+        print(f"{RED}❌ {IMAGE_SERVER_SCRIPT} bulunamadi. Gorsel sunucusu baslatilamiyor.{RESET}")
+        return False
+
+    if is_port_in_use("127.0.0.1", IMAGE_SERVER_PORT):
+        print(f"{YELLOW}⚠️ Port {IMAGE_SERVER_PORT} zaten kullanimda; mevcut sunucu varsayiliyor.{RESET}")
+        return True
+
+    print(f"🖼️  Gorsel sunucusu aciliyor (salt-okunur, port {IMAGE_SERVER_PORT})...")
+    processes.append(subprocess.Popen([sys.executable, str(IMAGE_SERVER_SCRIPT)], cwd=os.getcwd()))
+    return wait_for_port("127.0.0.1", IMAGE_SERVER_PORT, timeout_sec=20)
+
+
+def start_tunnel(processes):
+    """Cloudflare tunelini baslatir ve PUBLIC_BASE_URL hazir olana kadar bekler."""
+    if not TUNNEL_SCRIPT.exists():
+        print(f"{RED}❌ {TUNNEL_SCRIPT} bulunamadi.{RESET}")
+        print(f"{YELLOW}   Graph API yuklemesi icin public URL gerekiyor.{RESET}")
+        print(f"{YELLOW}   Cozum: repoyu guncelleyin veya PUBLIC_BASE_URL'i .env icine elle yazin.{RESET}")
+        print(f"{YELLOW}   Tunnel olmadan devam ediliyor...{RESET}")
+        return
+
+    if not start_image_server(processes):
+        print(f"{YELLOW}⚠️ Gorsel sunucusu hazir degil; tunnel yine de deneniyor.{RESET}")
+
+    print("🌐 Graph API aktif: tunnel otomatik başlatılıyor...")
+    processes.append(subprocess.Popen([sys.executable, str(TUNNEL_SCRIPT)], cwd=os.getcwd()))
+
+    public_url = wait_for_public_base_url(timeout_sec=25)
+    if public_url:
+        print(f"{GREEN}✅ PUBLIC_BASE_URL hazır: {public_url}{RESET}")
+    else:
+        print(f"{YELLOW}⚠️ PUBLIC_BASE_URL henüz hazır değil. Tunnel terminalini kontrol edin.{RESET}")
+
+
 def check_venv():
     """Sanal ortamda mıyız kontrol eder. Değilse sanal ortam Python'u ile yeniden başlatır."""
     if sys.prefix == sys.base_prefix:
@@ -107,21 +176,20 @@ def run_app():
     processes = []
 
     try:
+        # 1. API token'i hazirla ve frontend'e aktar
+        try:
+            from core.runtime.api_auth import get_or_create_api_token
+            api_token = get_or_create_api_token()
+            sync_frontend_token(api_token)
+            print(f"{GREEN}🔒 API token hazır (.env: ATLAS_API_TOKEN){RESET}")
+        except Exception as e:
+            print(f"{RED}⚠️ API token oluşturulamadı: {e}{RESET}")
+            print(f"{YELLOW}   Backend /api/* uçları korumasız çalışacak.{RESET}")
+
         env_map = read_env_file()
         auto_tunnel = (env_map.get("AUTO_TUNNEL") or "1").strip() != "0"
         if auto_tunnel and has_graph_config(env_map):
-            print("🌐 Graph API aktif: tunnel otomatik başlatılıyor...")
-            tunnel_process = subprocess.Popen(
-                [sys.executable, "tools/setup_tunnel.py"],
-                cwd=os.getcwd()
-            )
-            processes.append(tunnel_process)
-
-            public_url = wait_for_public_base_url(timeout_sec=25)
-            if public_url:
-                print(f"{GREEN}✅ PUBLIC_BASE_URL hazır: {public_url}{RESET}")
-            else:
-                print(f"{YELLOW}⚠️ PUBLIC_BASE_URL henüz hazır değil. Tunnel terminalini kontrol edin.{RESET}")
+            start_tunnel(processes)
 
         # 2. Backend Başlat
         print(f"📦 Backend sunucusu açılıyor...")

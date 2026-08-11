@@ -13,7 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 import uvicorn
 import requests
@@ -25,6 +25,24 @@ try:
 except ImportError:
     # Fallback colors if config is missing (unlikely)
     RED, YELLOW, GREEN, RESET = "", "", "", ""
+
+# API token dogrulamasi. Import edilemezse koruma acilamaz; bunu sessizce
+# gecmek yerine acikca belirtiyoruz ki guvenlik durumu gorunur olsun.
+try:
+    from core.runtime.api_auth import (
+        HEADER_NAME as AUTH_HEADER_NAME,
+        is_authorized,
+        read_api_token,
+    )
+except ImportError as e:
+    print(f"{RED}⚠️ api_auth yuklenemedi ({e}); /api/* korumasiz calisacak.{RESET}")
+    AUTH_HEADER_NAME = "X-Atlas-Token"
+
+    def read_api_token():
+        return ""
+
+    def is_authorized(provided, expected=None):
+        return False
 
 try:
     from core.clients.llm import llm_answer, visual_prompt_generator
@@ -107,13 +125,83 @@ def setup_safe_piper():
 
 app = FastAPI(title="Ses Asistanı API", version="1.0.0")
 
-# CORS setup
+# ==================================================
+# GUVENLIK
+# Bu backend yerel kullanim icin tasarlandi ve 127.0.0.1'e baglanir.
+# Cloudflare tuneli artik bu servise DEGIL, yalnizca statik gorsel sunan
+# web/backend/image_server.py'ye baglanir (bkz. tools/setup_tunnel.py).
+# Ek savunma hatti olarak /api/* uclari paylasimli token ile korunur.
+# ==================================================
+
+# Izinli origin listesi. Varsayilan: yerel Vite dev sunucusu.
+_DEFAULT_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
+_env_origins = (os.getenv("ALLOWED_ORIGINS") or "").strip()
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _env_origins.split(",") if o.strip()]
+    if _env_origins
+    else _DEFAULT_ALLOWED_ORIGINS
+)
+
+# Token dogrulamasi gerektirmeyen yollar.
+_PUBLIC_PATHS = {"/", "/robots.txt", "/healthz"}
+_PUBLIC_PREFIXES = ("/images/", "/videos/", "/docs", "/openapi.json", "/redoc")
+
+
+def _is_public_path(path: str) -> bool:
+    if path in _PUBLIC_PATHS:
+        return True
+    return path.startswith(_PUBLIC_PREFIXES)
+
+
+@app.middleware("http")
+async def api_token_middleware(request, call_next):
+    """
+    /api/* uclarini X-Atlas-Token basligi ile korur.
+
+    Token .env icindeki ATLAS_API_TOKEN'dan okunur; run.py ilk calistirmada
+    uretir ve frontend'e VITE_ATLAS_API_TOKEN olarak aktarir.
+    """
+    path = request.url.path
+
+    # CORS preflight istekleri token tasiyamaz; CORS katmani cevaplasin.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    if not path.startswith("/api/") or _is_public_path(path):
+        return await call_next(request)
+
+    expected = read_api_token()
+    if not expected:
+        # Token hic kurulmamis: yerel gelistirme icin gecis ver ama uyar.
+        if not getattr(app.state, "warned_missing_token", False):
+            print(
+                f"{YELLOW}⚠️ ATLAS_API_TOKEN tanimli degil; /api/* korumasiz calisiyor. "
+                f"'python run.py' ile baslatmak token uretir.{RESET}"
+            )
+            app.state.warned_missing_token = True
+        return await call_next(request)
+
+    provided = request.headers.get(AUTH_HEADER_NAME) or request.query_params.get("token")
+    if not is_authorized(provided, expected):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Gecersiz veya eksik API token."},
+        )
+
+    return await call_next(request)
+
+
+# CORS, auth middleware'inden SONRA eklenir; boylece dista kalir ve
+# preflight isteklerini token kontrolune takilmadan cevaplayabilir.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", AUTH_HEADER_NAME],
 )
 
 # Mount generated images directory
@@ -776,14 +864,31 @@ async def imgbb_config_post_endpoint(req: ImgBBConfigRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def _mask_secret(value: str) -> str:
+    """Sirri geri dondurmeden 'dolu mu' bilgisini gosterebilmek icin maskeler."""
+    v = (value or "").strip()
+    if not v:
+        return ""
+    if len(v) <= 4:
+        return "*" * len(v)
+    return f"{'*' * (len(v) - 4)}{v[-4:]}"
+
+
 @app.get("/api/imgbb/config")
 async def imgbb_config_get_endpoint():
-    """Returns current ImgBB config"""
+    """
+    ImgBB ayarinin durumunu dondurur.
+
+    API key'in kendisi ASLA dondurulmez; yalnizca kurulu olup olmadigi ve
+    son 4 hanesi gonderilir. Anahtar alani UI'da yalniz-yazilir olarak calisir.
+    """
     try:
         values = _read_env_values()
+        key = values.get("IMGBB_API_KEY", "").strip()
         return {
             "success": True,
-            "imgbb_api_key": values.get("IMGBB_API_KEY", "")
+            "configured": bool(key),
+            "masked": _mask_secret(key),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -111,6 +111,48 @@ def get_instagram_credentials():
 def _is_graph_api_enabled() -> bool:
     return bool(_cfg("IG_USER_ID") and _cfg("FB_ACCESS_TOKEN"))
 
+
+# ==================================================
+# LEGACY (instagrapi) YOLU
+#
+# instagrapi, Instagram'in resmi olmayan mobil API'sini taklit eder. Bu
+# Instagram kullanim sartlarina aykiridir ve hesap kisitlama/kapatma riski
+# tasir. Bu yuzden yedek yol ARTIK OTOMATIK DEVREYE GIRMEZ; kullanicinin
+# .env icinde ALLOW_LEGACY_INSTAGRAPI=1 diyerek riski acikca kabul etmesi gerekir.
+# ==================================================
+
+GRAPH_REQUIRED_FIELDS = ["IG_USER_ID", "FB_ACCESS_TOKEN", "PUBLIC_BASE_URL"]
+
+LEGACY_WARNING = (
+    "UYARI: instagrapi resmi olmayan bir arayuzdur. Instagram kullanim "
+    "sartlarina aykiridir ve hesabinizin kisitlanmasina veya kapatilmasina "
+    "yol acabilir. Onerilen yol Graph API'dir."
+)
+
+
+def _missing_graph_fields() -> list:
+    """Graph API icin eksik olan .env alanlarini listeler."""
+    return [name for name in GRAPH_REQUIRED_FIELDS if not _cfg(name)]
+
+
+def is_legacy_upload_allowed() -> bool:
+    return _cfg("ALLOW_LEGACY_INSTAGRAPI").lower() in {"1", "true", "yes"}
+
+
+def _legacy_blocked_message() -> str:
+    """
+    Graph API kurulu degilken kullaniciya ne eksik oldugunu soyler.
+    Sessizce legacy yola dusmek yerine bu mesajla duruyoruz.
+    """
+    missing = ", ".join(_missing_graph_fields()) or "-"
+    return (
+        "Instagram yukleme yapilamadi: Graph API kurulumu tamamlanmamis. "
+        f"Eksik alan(lar): {missing}. "
+        "Studio > Instagram Baglanti Ayarlari > Graph API sekmesinden doldurun. "
+        "Eski instagrapi yolunu bilerek kullanmak istiyorsaniz .env icine "
+        "ALLOW_LEGACY_INSTAGRAPI=1 ekleyin. " + LEGACY_WARNING
+    )
+
 def _as_public_image_url(image_path_or_url: str) -> str:
     """
     Instagram Graph API needs a publicly reachable URL.
@@ -614,6 +656,14 @@ def login_and_upload(image_path, caption):
             print(f"{GREEN}{success_msg}{RESET}")
             return True, success_msg
 
+        # Graph API kurulu degil. Legacy yola sessizce dusme.
+        if not is_legacy_upload_allowed():
+            msg = _legacy_blocked_message()
+            print(f"{RED}{msg}{RESET}")
+            return False, msg
+
+        print(f"{YELLOW}{LEGACY_WARNING}{RESET}")
+
         # Giriş Yap
         cl = login_to_instagram()
         if not cl:
@@ -663,6 +713,14 @@ def login_and_upload_album(image_paths, caption):
             error_msg = f"Graph API album yukleme hatasi: {e}"
             print(f"{RED}{error_msg}{RESET}")
             return False, error_msg
+
+    # Graph API kurulu degil. Legacy yola sessizce dusme.
+    if not is_legacy_upload_allowed():
+        msg = _legacy_blocked_message()
+        print(f"{RED}{msg}{RESET}")
+        return False, msg
+
+    print(f"{YELLOW}{LEGACY_WARNING}{RESET}")
 
     # Temp klasör
     temp_dir = "temp_insta_upload"
