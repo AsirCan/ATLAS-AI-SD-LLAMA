@@ -6,10 +6,9 @@ garanti eder. TestClient lifespan olaylarini tetiklemez; Ollama/SD
 baslatilmaz.
 """
 
+import main as backend
 import pytest
 from fastapi.testclient import TestClient
-
-import main as backend
 
 pytestmark = pytest.mark.backend
 

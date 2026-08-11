@@ -12,7 +12,6 @@ import pytest
 from core.agents.base import CancelledError
 from core.pipeline import orchestrator as orch_module
 from core.pipeline.orchestrator import Orchestrator
-from core.pipeline.state import PipelineState
 
 
 class StubAgent:

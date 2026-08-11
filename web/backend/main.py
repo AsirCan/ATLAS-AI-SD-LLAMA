@@ -30,11 +30,8 @@ except ImportError:
 # API token dogrulamasi. Import edilemezse koruma acilamaz; bunu sessizce
 # gecmek yerine acikca belirtiyoruz ki guvenlik durumu gorunur olsun.
 try:
-    from core.runtime.api_auth import (
-        HEADER_NAME as AUTH_HEADER_NAME,
-        is_authorized,
-        read_api_token,
-    )
+    from core.runtime.api_auth import HEADER_NAME as AUTH_HEADER_NAME
+    from core.runtime.api_auth import is_authorized, read_api_token
 except ImportError as e:
     print(f"{RED}⚠️ api_auth yuklenemedi ({e}); /api/* korumasiz calisacak.{RESET}")
     AUTH_HEADER_NAME = "X-Atlas-Token"
@@ -1257,5 +1254,33 @@ async def startup_event():
         print(f"{RED}⚠️ SD Start Error: {e}{RESET}")
 
 
+def server_options() -> dict:
+    """
+    Sunucu calisma secenekleri.
+
+    reload VARSAYILAN OLARAK KAPALI. Acik oldugunda dosya izleyici sunucuyu
+    yeniden baslatiyor; uzun suren bir ajan/video isi ortasindaysa is sessizce
+    kayboluyor, ilerleme durumu sifirlaniyor ve UI'daki poller askida kaliyor.
+    Ayrica yeniden baslatma sirasinda iki surec ayni anda GPU'ya erismeye
+    calisabiliyor.
+
+    Gelistirme icin: DEV_RELOAD=1 python web/backend/main.py
+    """
+    return {
+        "host": os.getenv("BACKEND_HOST", "127.0.0.1"),
+        "port": int(os.getenv("BACKEND_PORT", "8000")),
+        "reload": os.getenv("DEV_RELOAD", "0").strip() == "1",
+    }
+
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    options = server_options()
+
+    if options["reload"]:
+        print(f"{YELLOW}⚠️ DEV_RELOAD acik: kod degisiminde sunucu yeniden baslar.{RESET}")
+        print(f"{YELLOW}   Devam eden ajan/video isleri kaybolabilir.{RESET}")
+        # reload yalnizca import string ile calisir.
+        uvicorn.run("main:app", host=options["host"], port=options["port"], reload=True)
+    else:
+        # Tek GPU: birden fazla worker VRAM'i paylasamaz, workers=1 kalmali.
+        uvicorn.run(app, host=options["host"], port=options["port"], workers=1)

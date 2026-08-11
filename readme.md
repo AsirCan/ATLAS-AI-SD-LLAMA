@@ -67,11 +67,29 @@ Notlar:
 - Graph API alanları doluysa `python run.py` tunnel helper'ı otomatik başlatır ve `PUBLIC_BASE_URL` günceller (`AUTO_TUNNEL=1`).
 
 ### Gereksinimler
-- **Python**: 3.10+
-- **Node.js**: (frontend için)
+- **Python**: 3.10 – 3.12 (3.13+ henüz test edilmedi)
+- **Node.js**: 18+ (frontend için)
 - **Ollama**: `https://ollama.com/`
 - **Stable Diffusion**: Forge veya WebUI API (varsayılan: `127.0.0.1:7860`)
 - (Video modunu kullanacaksan) **FFmpeg** sistemde kurulu olmalı.
+
+#### Bağımlılık yönetimi
+| Dosya | Ne işe yarar |
+|---|---|
+| `requirements.in` | Doğrudan bağımlılıklar, sürümsüz — "neye ihtiyacımız var" |
+| `requirements.txt` | Tüm sürümler sabitlenmiş (geçişli dahil) — "tam olarak ne kurulacak" |
+| `requirements-dev.txt` | Yalnızca test için gereken hafif paketler |
+
+`requirements.txt` elle düzenlenmez. Güncellemek için:
+
+```powershell
+pip install -r requirements.in
+pip freeze > requirements.txt
+```
+
+Geçişli bağımlılıklar da sabitlenmiştir; yalnızca doğrudan paketleri pinlemek
+tekrarlanabilirlik sağlamaz (`pydantic`, `starlette`, `ctranslate2` gibi
+paketler serbest kalırdı).
 
 ### TTS (Piper) notu (Windows)
 - TTS için `models/` altında şu iki dosya gerekir:
@@ -159,6 +177,19 @@ Backend + Frontend’i birlikte başlatır ve tarayıcıyı açar:
 ```powershell
 python run.py
 ```
+
+Backend **auto-reload kapalı** çalışır. Bu bilinçlidir: reload açıkken dosya
+izleyici sunucuyu yeniden başlatır ve o sırada devam eden bir ajan/video işi
+sessizce kaybolur, ilerleme durumu sıfırlanır.
+
+### Geliştirme modu (auto-reload)
+Yalnızca backend koduyla uğraşırken, devam eden uzun bir iş yokken:
+
+```powershell
+$env:DEV_RELOAD=1; python web/backend/main.py
+```
+
+Host/port da değiştirilebilir: `BACKEND_HOST`, `BACKEND_PORT`.
 
 ### CLI: Otonom ajan
 UI olmadan, doğrudan pipeline çalıştırır:

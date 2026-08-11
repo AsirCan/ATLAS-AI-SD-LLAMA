@@ -1,0 +1,37 @@
+# Atlas Assistant — DOGRUDAN bagimliliklar (surumsuz).
+#
+# Bu dosya "neye ihtiyacimiz var" sorusunu cevaplar; requirements.txt ise
+# "tam olarak hangi surumler kurulacak" sorusunu. Ikisini karistirmayin.
+#
+# requirements.txt'i yeniden uretmek icin:
+#   python -m venv .venv && .venv\Scripts\activate
+#   pip install -r requirements.in
+#   pip freeze > requirements.txt
+#
+# Yalnizca burada listelenenler dogrudan import edilir. Gecisli bagimliliklar
+# (pydantic, starlette, ctranslate2, numpy ...) requirements.txt icinde
+# sabitlenir ama buraya yazilmaz.
+
+requests
+feedparser
+instagrapi
+SpeechRecognition
+huggingface_hub
+fastapi
+uvicorn
+piper-tts
+
+# FastAPI, File(...) kullanan uclar icin import aninda arar
+python-multipart
+
+python-dotenv
+pydub
+keyring
+pathvalidate
+faster-whisper
+pymongo
+
+# core/clients/insta_client.py modul seviyesinde "from PIL import Image" yapiyor.
+# Onceden yalnizca instagrapi uzerinden gecisli geliyordu; dogrudan bagimlilik
+# oldugu icin acikca listelenmeli.
+Pillow
