@@ -8,7 +8,7 @@ export default function InstaConfigModal() {
         graphStatus, graphTokenStatus, tokenStatusText,
         graphConfig, setGraphConfig, saveGraphConfig,
         refreshGraphStatus, refreshGraphTokenStatus, refreshImgBBConfig,
-        imgbbApiKey, setImgbbApiKey, imgbbConfigured, saveImgBBConfig,
+        imgbbApiKey, setImgbbApiKey, imgbbConfigured, imgbbMasked, saveImgBBConfig,
         graphEnvTemplate, copyGraphEnvTemplate, envCopied,
         closeInstaModal, instaUser, setInstaUser, instaPass, setInstaPass,
     } = useAppContext();
@@ -163,10 +163,13 @@ export default function InstaConfigModal() {
                             <input
                                 type="password"
                                 className="w-full bg-white dark:bg-dark-800 border border-emerald-300/60 dark:border-emerald-400/30 rounded-xl p-3 text-sm text-gray-900 dark:text-white"
-                                placeholder="IMGBB_API_KEY"
+                                placeholder={imgbbConfigured ? `Kayitli: ${imgbbMasked} — degistirmek icin yeni key girin` : 'IMGBB_API_KEY'}
                                 value={imgbbApiKey}
                                 onChange={(e) => setImgbbApiKey(e.target.value)}
                             />
+                            <p className="text-xs text-emerald-900/70 dark:text-emerald-100/70">
+                                Guvenlik nedeniyle kayitli anahtar geri gosterilmez; bu alan yalniz-yazilirdir.
+                            </p>
                             <div className="flex gap-2">
                                 <button onClick={saveImgBBConfig} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm">ImgBB anahtarini .env kaydet</button>
                                 <button onClick={refreshImgBBConfig} className="px-4 py-2 rounded-lg border border-emerald-300/70 dark:border-emerald-400/30 text-emerald-700 dark:text-emerald-300 text-sm">Yenile</button>
