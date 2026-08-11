@@ -5,10 +5,9 @@ Bu servis internete aciliyor. Bu yuzden UZERINDE HICBIR /api UCU OLMAMALI;
 issue #1'in cozumunun temeli bu.
 """
 
+import image_server
 import pytest
 from fastapi.testclient import TestClient
-
-import image_server
 
 pytestmark = pytest.mark.backend
 

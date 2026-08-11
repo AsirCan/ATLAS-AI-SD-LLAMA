@@ -1,6 +1,5 @@
 """core/clients/llm.py — LLMService: JSON uretimi, retry, iptal."""
 
-import json
 
 import pytest
 

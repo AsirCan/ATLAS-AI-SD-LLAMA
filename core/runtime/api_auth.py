@@ -15,7 +15,6 @@ sekme) API'yi cagirmasini da engeller.
 import os
 import secrets
 from pathlib import Path
-from typing import Optional
 
 ENV_KEY = "ATLAS_API_TOKEN"
 HEADER_NAME = "X-Atlas-Token"
@@ -88,7 +87,7 @@ def get_or_create_api_token() -> str:
     return token
 
 
-def is_authorized(provided: Optional[str], expected: Optional[str] = None) -> bool:
+def is_authorized(provided: str | None, expected: str | None = None) -> bool:
     """
     Sabit zamanli karsilastirma ile token dogrular.
     Beklenen token tanimli degilse yetkilendirme kapali sayilir (False).
