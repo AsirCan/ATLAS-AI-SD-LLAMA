@@ -2,8 +2,9 @@ import base64
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 import requests
 
@@ -87,7 +88,7 @@ CROWD_PROMPT_KEYWORDS = (
     "street scene",
 )
 
-_CAPABILITY_CACHE: Dict[str, Any] = {
+_CAPABILITY_CACHE: dict[str, Any] = {
     "upscalers": None,
     "scripts_txt2img": None,
     "face_restorers": None,
@@ -150,7 +151,7 @@ def _apply_quality_anchor(prompt_en: str) -> str:
     return prompt
 
 
-def _safe_get_json(endpoint: str, timeout: int = 3) -> Optional[Any]:
+def _safe_get_json(endpoint: str, timeout: int = 3) -> Any | None:
     try:
         r = requests.get(endpoint, timeout=timeout)
         if not r.ok:
@@ -170,23 +171,23 @@ def _refresh_capabilities_if_needed(force: bool = False) -> None:
     face_restorers_data = _safe_get_json(f"{URL}/sdapi/v1/face-restorers")
     controlnet_models_data = _safe_get_json(f"{URL}/controlnet/model_list")
 
-    upscalers: List[str] = []
+    upscalers: list[str] = []
     if isinstance(upscalers_data, list):
         for item in upscalers_data:
             if isinstance(item, dict) and item.get("name"):
                 upscalers.append(str(item["name"]))
 
-    scripts_txt2img: List[str] = []
+    scripts_txt2img: list[str] = []
     if scripts_data and isinstance(scripts_data.get("txt2img"), list):
         scripts_txt2img = [str(x) for x in scripts_data["txt2img"] if x]
 
-    face_restorers: List[str] = []
+    face_restorers: list[str] = []
     if isinstance(face_restorers_data, list):
         for item in face_restorers_data:
             if isinstance(item, dict) and item.get("name"):
                 face_restorers.append(str(item["name"]))
 
-    controlnet_models: List[str] = []
+    controlnet_models: list[str] = []
     if controlnet_models_data and isinstance(controlnet_models_data.get("model_list"), list):
         controlnet_models = [str(x) for x in controlnet_models_data["model_list"] if x]
 
@@ -197,22 +198,22 @@ def _refresh_capabilities_if_needed(force: bool = False) -> None:
     _CAPABILITY_CACHE["checked_at"] = now
 
 
-def _list_upscalers() -> List[str]:
+def _list_upscalers() -> list[str]:
     _refresh_capabilities_if_needed()
     return list(_CAPABILITY_CACHE.get("upscalers") or [])
 
 
-def _list_txt2img_scripts() -> List[str]:
+def _list_txt2img_scripts() -> list[str]:
     _refresh_capabilities_if_needed()
     return list(_CAPABILITY_CACHE.get("scripts_txt2img") or [])
 
 
-def _list_face_restorers() -> List[str]:
+def _list_face_restorers() -> list[str]:
     _refresh_capabilities_if_needed()
     return list(_CAPABILITY_CACHE.get("face_restorers") or [])
 
 
-def _list_controlnet_models() -> List[str]:
+def _list_controlnet_models() -> list[str]:
     _refresh_capabilities_if_needed()
     return list(_CAPABILITY_CACHE.get("controlnet_models") or [])
 
@@ -227,7 +228,7 @@ def _prompt_is_crowd_scene(prompt: str) -> bool:
     return any(keyword in text for keyword in CROWD_PROMPT_KEYWORDS)
 
 
-def _pick_best_from_available(preferred_csv: str, available: List[str], fallback: str) -> str:
+def _pick_best_from_available(preferred_csv: str, available: list[str], fallback: str) -> str:
     if not available:
         return fallback
 
@@ -246,7 +247,7 @@ def _pick_best_from_available(preferred_csv: str, available: List[str], fallback
     return available[0]
 
 
-def _pick_face_restorer() -> Optional[str]:
+def _pick_face_restorer() -> str | None:
     if not SD_RESTORE_FACES:
         return None
     available = _list_face_restorers()
@@ -284,7 +285,7 @@ def _build_adetailer_alwayson(
     *,
     prompt_en: str,
     negative_prompt: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     if not SD_ENABLE_ADDETAILER:
         return None
     if SD_ADDETAILER_HUMAN_ONLY and not _prompt_has_human_subject(prompt_en):
@@ -317,7 +318,7 @@ def _build_adetailer_alwayson(
         "ad_mask_blur": 4,
     }
 
-    args: List[Any] = [True, False, face_args]
+    args: list[Any] = [True, False, face_args]
     if SD_ADDETAILER_ENABLE_HANDS:
         args.append(hand_args)
 
@@ -332,7 +333,7 @@ def _pick_controlnet_model_hint(keyword: str) -> str:
     return ""
 
 
-def _read_image_b64(image_path: str) -> Optional[str]:
+def _read_image_b64(image_path: str) -> str | None:
     try:
         with open(image_path, "rb") as f:
             return base64.b64encode(f.read()).decode("utf-8")
@@ -340,7 +341,7 @@ def _read_image_b64(image_path: str) -> Optional[str]:
         return None
 
 
-def _build_controlnet_alwayson(control_image_path: Optional[str]) -> Optional[Dict[str, Any]]:
+def _build_controlnet_alwayson(control_image_path: str | None) -> dict[str, Any] | None:
     if not SD_ENABLE_CONTROLNET:
         return None
     if not control_image_path or not os.path.exists(control_image_path):
@@ -359,7 +360,7 @@ def _build_controlnet_alwayson(control_image_path: Optional[str]) -> Optional[Di
     if not canny_model and not depth_model:
         return None
 
-    units: List[Dict[str, Any]] = []
+    units: list[dict[str, Any]] = []
     if canny_model:
         units.append(
             {
@@ -394,7 +395,7 @@ def _build_controlnet_alwayson(control_image_path: Optional[str]) -> Optional[Di
     return {"ControlNet": {"args": units}}
 
 
-def _upscale_image_base64(img_base64: str, *, cancel_checker: Optional[Callable[[], bool]]) -> str:
+def _upscale_image_base64(img_base64: str, *, cancel_checker: Callable[[], bool] | None) -> str:
     if not SD_ENABLE_POST_UPSCALE or SD_POST_UPSCALE_FACTOR <= 1.0:
         return img_base64
 
@@ -427,7 +428,7 @@ def _upscale_image_base64(img_base64: str, *, cancel_checker: Optional[Callable[
     return img_base64
 
 
-def _is_cancelled(cancel_checker: Optional[Callable[[], bool]]) -> bool:
+def _is_cancelled(cancel_checker: Callable[[], bool] | None) -> bool:
     try:
         return bool(cancel_checker and cancel_checker())
     except Exception:
@@ -446,7 +447,7 @@ def _post_with_cancel(
     endpoint: str,
     payload: dict,
     timeout: int,
-    cancel_checker: Optional[Callable[[], bool]],
+    cancel_checker: Callable[[], bool] | None,
 ):
     result = {}
     done = threading.Event()
@@ -480,10 +481,10 @@ def _post_with_cancel(
 
 def resim_ciz(
     prompt_en: str,
-    negative_prompt: Optional[str] = None,
-    model_checkpoint: Optional[str] = None,
-    control_image_path: Optional[str] = None,
-    cancel_checker: Optional[Callable[[], bool]] = None,
+    negative_prompt: str | None = None,
+    model_checkpoint: str | None = None,
+    control_image_path: str | None = None,
+    cancel_checker: Callable[[], bool] | None = None,
     request_timeout: int = 300,
 ):
     """
@@ -504,7 +505,7 @@ def resim_ciz(
 
     print(f"SD RESOLUTION: {SD_WIDTH} x {SD_HEIGHT}")
 
-    base_payload: Dict[str, Any] = {
+    base_payload: dict[str, Any] = {
         "prompt": prompt_en,
         "negative_prompt": effective_negative,
         "steps": SD_STEPS,
@@ -529,7 +530,7 @@ def resim_ciz(
         )
         print(f"{YELLOW}Using hires upscaler: {hr_upscaler}{RESET}")
 
-    override_settings: Dict[str, Any] = {}
+    override_settings: dict[str, Any] = {}
     if effective_checkpoint:
         override_settings["sd_model_checkpoint"] = effective_checkpoint
         print(f"{YELLOW}Using SD checkpoint override: {effective_checkpoint}{RESET}")
@@ -542,8 +543,8 @@ def resim_ciz(
         base_payload["override_settings"] = override_settings
         base_payload["override_settings_restore_afterwards"] = True
 
-    enhanced_payload: Dict[str, Any] = dict(base_payload)
-    alwayson_scripts: Dict[str, Any] = {}
+    enhanced_payload: dict[str, Any] = dict(base_payload)
+    alwayson_scripts: dict[str, Any] = {}
 
     adetailer_script = _build_adetailer_alwayson(
         prompt_en=prompt_en,
@@ -564,11 +565,11 @@ def resim_ciz(
     try:
         print(f"{YELLOW}Starting generation...{RESET}")
         start_time = time.time()
-        payloads_to_try: List[Dict[str, Any]] = [enhanced_payload]
+        payloads_to_try: list[dict[str, Any]] = [enhanced_payload]
         if enhanced_payload != base_payload:
             payloads_to_try.append(base_payload)
 
-        last_error_text: Optional[str] = None
+        last_error_text: str | None = None
         for idx, payload in enumerate(payloads_to_try, start=1):
             enhanced_try = idx == 1 and enhanced_payload != base_payload
             try:

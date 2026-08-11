@@ -1,13 +1,12 @@
 import re
-from typing import List
 
 # Matches hashtags like #AI, #SeaTurtles, #marine_bio
 HASHTAG_RE = re.compile(r"(?<![\w#])#[\w]+", re.UNICODE)
 
 
-def _unique_preserve_order(values: List[str]) -> List[str]:
+def _unique_preserve_order(values: list[str]) -> list[str]:
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for v in values:
         key = v.lower()
         if key in seen:
@@ -45,4 +44,3 @@ def format_caption_hashtags_bottom(text: str, extra_hashtags: str = "") -> str:
     if not body:
         return hashtag_line
     return f"{body}\n\n{hashtag_line}"
-

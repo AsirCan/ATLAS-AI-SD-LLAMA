@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v8.55.0
+    hooks:
+      - id: eslint
+        files: ^web/frontend/src/
+        types: [file]
+        types_or: [javascript, jsx]
+        additional_dependencies:
+          - eslint@8.55.0
+          - eslint-plugin-react@7.33.2
+          - eslint-plugin-react-hooks@4.6.0
+          - eslint-plugin-react-refresh@0.4.5
+          - "@eslint/js@8.55.0"
+          - globals@15.0.0

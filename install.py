@@ -1,15 +1,16 @@
-﻿import os
-import subprocess
-import sys
-import shutil
 import ctypes
 import io
+import os
+import shutil
+import subprocess
+import sys
 import zipfile
 from shutil import which
 
 # ================= AYARLAR =================
 FORGE_PATH = r"C:\Forge"
 FORGE_REPO = "https://github.com/lllyasviel/stable-diffusion-webui-forge.git"
+
 
 # Forge model dizini: bazı kurulumlarda `C:\Forge\models\Stable-diffusion` (klasik),
 # bazı eski/özel kurulumlarda `C:\Forge\webui\models\Stable-diffusion` olabilir.
@@ -27,6 +28,7 @@ def _resolve_sd_model_dir():
             pass
     # hiçbiri yoksa klasik yolu oluşturacağız
     return candidates[0]
+
 
 SD_MODEL_DIR = _resolve_sd_model_dir()
 SD_MODEL_REPO = "RunDiffusion/Juggernaut-XL-v9"
@@ -68,7 +70,9 @@ CONTROLNET_MODEL_DIR = _resolve_forge_model_subdir("ControlNet")
 FORGE_EXTENSIONS_DIR = _resolve_forge_extensions_dir()
 
 # Piper (TTS) - Windows standalone binary (fix for espeakbridge missing)
-PIPER_WINDOWS_ZIP_URL = "https://sourceforge.net/projects/piper-tts.mirror/files/2023.11.14-2/piper_windows_amd64.zip/download"
+PIPER_WINDOWS_ZIP_URL = (
+    "https://sourceforge.net/projects/piper-tts.mirror/files/2023.11.14-2/piper_windows_amd64.zip/download"
+)
 PIPER_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "piper")
 PIPER_EXE_PATH = os.path.join(PIPER_TOOLS_DIR, "piper.exe")
 PIPER_MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -81,6 +85,8 @@ PIPER_EN_CONFIG_NAME = "en_US-lessac-medium.onnx.json"
 CLOUDFLARED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "cloudflared")
 CLOUDFLARED_EXE = os.path.join(CLOUDFLARED_DIR, "cloudflared.exe")
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+
+
 def _hf_list_files(repo):
     """Return a list of filenames in a Hugging Face repo via the API."""
     import requests  # noqa: E402
@@ -92,6 +98,7 @@ def _hf_list_files(repo):
     data = r.json()
     siblings = data.get("siblings", [])
     return [s.get("rfilename") for s in siblings if s.get("rfilename")]
+
 
 def _build_piper_url_candidates():
     """Build a list of possible Hugging Face URLs for the Fahrettin model."""
@@ -136,18 +143,10 @@ def _build_piper_url_candidates():
 
     # Legacy rhasspy path (removed Dec 30, 2025, keep as fallback)
     rhasspy_base = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
-    model_urls.append(
-        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx"
-    )
-    model_urls.append(
-        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx?download=true"
-    )
-    config_urls.append(
-        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json"
-    )
-    config_urls.append(
-        rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json?download=true"
-    )
+    model_urls.append(rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx")
+    model_urls.append(rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx?download=true")
+    config_urls.append(rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json")
+    config_urls.append(rhasspy_base + "tr/tr_TR/fahrettin/medium/tr_TR-fahrettin-medium.onnx.json?download=true")
 
     return model_urls, config_urls
 
@@ -159,20 +158,13 @@ def _build_piper_en_url_candidates():
 
     # Legacy rhasspy path (still commonly used for Piper voices)
     rhasspy_base = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
-    model_urls.append(
-        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx"
-    )
-    model_urls.append(
-        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true"
-    )
-    config_urls.append(
-        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json"
-    )
-    config_urls.append(
-        rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json?download=true"
-    )
+    model_urls.append(rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx")
+    model_urls.append(rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx?download=true")
+    config_urls.append(rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json")
+    config_urls.append(rhasspy_base + "en/en_US/lessac/medium/en_US-lessac-medium.onnx.json?download=true")
 
     return model_urls, config_urls
+
 
 # RENKLER
 GREEN = "\033[92m"
@@ -180,24 +172,29 @@ YELLOW = "\033[93m"
 RED = "\033[91m"
 RESET = "\033[0m"
 
+
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+    except Exception:
         return False
+
 
 def check_venv():
     """Sanal ortamda mıyız kontrol eder."""
     return sys.prefix != sys.base_prefix
+
 
 def _run(cmd, check=True):
     """Subprocess wrapper with nicer output."""
     print(f"{YELLOW}   > {cmd}{RESET}")
     return subprocess.run(cmd, check=check)
 
+
 def _run_capture(cmd):
     """Subprocess wrapper capturing output (for probing)."""
     return subprocess.run(cmd, text=True, capture_output=True)
+
 
 def _ensure_env_var_line(key: str, value: str):
     """Append KEY=VALUE into .env if missing. Does not overwrite existing values."""
@@ -205,7 +202,7 @@ def _ensure_env_var_line(key: str, value: str):
     lines = []
     if os.path.exists(env_path):
         try:
-            with open(env_path, "r", encoding="utf-8") as f:
+            with open(env_path, encoding="utf-8") as f:
                 lines = f.read().splitlines()
         except Exception:
             with open(env_path, "rb") as f:
@@ -215,7 +212,7 @@ def _ensure_env_var_line(key: str, value: str):
         example_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.example")
         if os.path.exists(example_path):
             try:
-                with open(example_path, "r", encoding="utf-8") as f:
+                with open(example_path, encoding="utf-8") as f:
                     lines = f.read().splitlines()
             except Exception:
                 lines = []
@@ -235,7 +232,7 @@ def _read_env_value(key: str):
     if not os.path.exists(env_path):
         return None
     try:
-        with open(env_path, "r", encoding="utf-8") as f:
+        with open(env_path, encoding="utf-8") as f:
             for raw in f:
                 line = raw.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -290,6 +287,7 @@ def configure_news_memory_backend():
     _ensure_env_var_line("USED_NEWS_TTL_DAYS", "7")
     print(f"{GREEN}MongoDB not reachable. Backend set to json.{RESET}")
 
+
 def _probe_piper_espeakbridge() -> bool:
     """Returns True if current python 'piper' module has espeakbridge."""
     try:
@@ -297,6 +295,7 @@ def _probe_piper_espeakbridge() -> bool:
         return probe.returncode == 0
     except Exception:
         return False
+
 
 def install_piper_windows_binary_if_needed():
     """
@@ -319,7 +318,9 @@ def install_piper_windows_binary_if_needed():
         print(f"{GREEN}✅ Piper python modülü espeakbridge içeriyor. Standalone piper.exe gerekmiyor.{RESET}")
         return
 
-    print(f"{YELLOW}⚠️ Piper python kurulumunda 'espeakbridge' yok. Windows'ta TTS için standalone piper.exe indirilecek...{RESET}")
+    print(
+        f"{YELLOW}⚠️ Piper python kurulumunda 'espeakbridge' yok. Windows'ta TTS için standalone piper.exe indirilecek...{RESET}"
+    )
 
     try:
         _run([sys.executable, "-m", "pip", "install", "requests"], check=True)
@@ -332,11 +333,11 @@ def install_piper_windows_binary_if_needed():
         r.raise_for_status()
 
         z = zipfile.ZipFile(io.BytesIO(r.content))
-        
+
         # Extract ALL files from ZIP (piper.exe + DLLs and other dependencies)
         print(f"{YELLOW}⏳ ZIP dosyası çıkartılıyor (piper.exe + DLL'ler)...{RESET}")
         z.extractall(PIPER_TOOLS_DIR)
-        
+
         # Find the piper.exe location within extracted files
         exe_found = None
         for root, dirs, files in os.walk(PIPER_TOOLS_DIR):
@@ -346,10 +347,10 @@ def install_piper_windows_binary_if_needed():
                     break
             if exe_found:
                 break
-        
+
         if not exe_found:
             raise RuntimeError("İndirilen zip içinde piper.exe bulunamadı.")
-        
+
         # If piper.exe is in a subdirectory, move all files to PIPER_TOOLS_DIR root
         exe_dir = os.path.dirname(exe_found)
         if exe_dir != PIPER_TOOLS_DIR:
@@ -363,7 +364,7 @@ def install_piper_windows_binary_if_needed():
                     else:
                         os.remove(dst)
                 shutil.move(src, dst)
-            
+
             # Clean up empty subdirectories
             for item in os.listdir(PIPER_TOOLS_DIR):
                 item_path = os.path.join(PIPER_TOOLS_DIR, item)
@@ -376,6 +377,7 @@ def install_piper_windows_binary_if_needed():
         print(f"{RED}❌ Piper otomatik kurulum hatası: {e}{RESET}")
         print(f"{YELLOW}Manuel çözüm: standalone Piper indirip .env içine PIPER_BIN=C:\\...\\piper.exe yazın.{RESET}")
 
+
 def _download_file(url, dest_path):
     """Download a file with streaming to avoid loading into memory."""
     import requests  # noqa: E402
@@ -386,6 +388,7 @@ def _download_file(url, dest_path):
             for chunk in r.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
+
 
 def _try_download(urls, dest_path):
     """Try multiple URLs, return True on success."""
@@ -586,6 +589,7 @@ def install_quality_model_pack():
 
     print(f"{GREEN}✅ Quality Pack step finished.{RESET}")
 
+
 def install_piper_tr_model_if_needed():
     """Downloads tr_TR-fahrettin-medium model/config into ./models."""
     print(f"\n{YELLOW}🗣️ Piper Türkçe modeli kontrol ediliyor (fahrettin-medium)...{RESET}")
@@ -676,13 +680,14 @@ def install_whisper_subtitle_model():
     except Exception as e:
         print(f"{YELLOW}⚠️ Whisper model indirme hatası (video subtitle fallback kullanılacak): {e}{RESET}")
 
+
 def install_requirements():
     """Gerekli kütüphaneleri yükler."""
     print(f"{YELLOW}📦 Python kütüphaneleri yükleniyor (requirements.txt)...{RESET}")
     try:
         _run([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], check=True)
         _run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
-        
+
         # HuggingFace için ekstra kontrol (requirements.txt'de yoksa diye)
         _run([sys.executable, "-m", "pip", "install", "huggingface_hub", "requests"], check=True)
         print(f"{GREEN}✅ Kütüphaneler yüklendi.{RESET}")
@@ -702,6 +707,7 @@ def install_requirements():
 
         sys.exit(1)
 
+
 def check_git():
     """Git kurulu mu kontrol eder."""
     try:
@@ -710,13 +716,16 @@ def check_git():
     except FileNotFoundError:
         return False
 
+
 def _find_npm_cmd():
     """Return npm executable name if available."""
     return which("npm") or which("npm.cmd") or which("npm.exe")
 
+
 def _find_node_cmd():
     """Return node executable name if available."""
     return which("node") or which("node.exe")
+
 
 def install_frontend_deps():
     """Frontend (Vite/React) dependencies."""
@@ -739,7 +748,6 @@ def install_frontend_deps():
     except subprocess.CalledProcessError as e:
         print(f"{RED}❌ Frontend bağımlılık kurulumu hatası: {e}{RESET}")
         sys.exit(1)
-
 
 
 def install_cloudflared_for_graph():
@@ -781,16 +789,17 @@ def install_cloudflared_for_graph():
         print(f"{RED}Cloudflared otomatik kurulamadi: {e}{RESET}")
         print(f"{YELLOW}Not: Gerekirse sonradan 'python tools/setup_tunnel.py' tekrar calistirabilirsiniz.{RESET}")
 
+
 def install_forge():
-    """Forge'u C:\Forge klasörüne indirir."""
+    r"""Forge'u C:\Forge klasörüne indirir."""
     print(f"\n{YELLOW}🏗️ Stable Diffusion (Forge) Kurulumu Kontrol Ediliyor...{RESET}")
-    
+
     if os.path.exists(FORGE_PATH):
         print(f"{GREEN}✅ Forge klasörü zaten var: {FORGE_PATH}{RESET}")
         return
 
     print(f"{YELLOW}⏳ Forge GitHub'dan indiriliyor (Bu biraz sürebilir)...{RESET}")
-    
+
     if not check_git():
         print(f"{RED}❌ HATA: Bilgisayarınızda 'Git' kurulu değil!{RESET}")
         print("Lütfen şuradan Git indirin ve kurun: https://git-scm.com/downloads")
@@ -805,19 +814,20 @@ def install_forge():
         print("Yönetici olarak çalıştırmayı deneyin veya internetinizi kontrol edin.")
         sys.exit(1)
 
+
 def install_sd_model():
     """Modeli indirir."""
     # Import here to ensure it's installed
     from huggingface_hub import hf_hub_download
-    
+
     print(f"\n{YELLOW}🎨 Juggernaut XL v9 Modeli İndiriliyor...{RESET}")
     print(f"{YELLOW}   Model klasörü: {SD_MODEL_DIR}{RESET}")
-    
+
     # Klasör oluştur (Eğer yoksa)
     os.makedirs(SD_MODEL_DIR, exist_ok=True)
 
     target_file = os.path.join(SD_MODEL_DIR, SD_MODEL_FILENAME)
-    
+
     if os.path.exists(target_file):
         print(f"{GREEN}✅ Model zaten mevcut: {target_file}{RESET}")
         return
@@ -837,17 +847,15 @@ def install_sd_model():
         pass
 
     print(f"{YELLOW}⏳ 6-7 GB indirme başlıyor. Lütfen kapatmayın...{RESET}")
-    
+
     try:
         hf_hub_download(
-            repo_id=SD_MODEL_REPO,
-            filename=SD_MODEL_FILENAME,
-            local_dir=SD_MODEL_DIR,
-            local_dir_use_symlinks=False
+            repo_id=SD_MODEL_REPO, filename=SD_MODEL_FILENAME, local_dir=SD_MODEL_DIR, local_dir_use_symlinks=False
         )
         print(f"{GREEN}✅ Model indirildi.{RESET}")
     except Exception as e:
         print(f"{RED}❌ Model indirme hatası: {e}{RESET}")
+
 
 def install_ollama_model():
     """Llama modelini çeker."""
@@ -868,15 +876,18 @@ def maybe_install_quality_pack():
     else:
         print(f"{YELLOW}Quality Pack skipped.{RESET}")
 
+
 if __name__ == "__main__":
-    os.system('cls' if os.name == 'nt' else 'clear')
+    os.system("cls" if os.name == "nt" else "clear")
     print(f"{GREEN}========================================{RESET}")
     print(f"{GREEN}   ATLAS KURULUM SİHİRBAZI (v2.0)   {RESET}")
     print(f"{GREEN}========================================{RESET}")
 
     if not is_admin():
         print(f"{YELLOW}⚠️ UYARI: Scripti Yönetici olarak çalıştırmadınız.{RESET}")
-        print(f"{YELLOW}Eğer C:\\Forge klasörünü oluştururken hata alırsanız, lütfen Yönetici olarak tekrar deneyin.{RESET}\n")
+        print(
+            f"{YELLOW}Eğer C:\\Forge klasörünü oluştururken hata alırsanız, lütfen Yönetici olarak tekrar deneyin.{RESET}\n"
+        )
 
     # 1. Sanal Ortam Kontrolü
     if not check_venv():
@@ -886,9 +897,9 @@ if __name__ == "__main__":
         print("   .venv\\Scripts\\activate")
         print(f"{YELLOW}Sonra tekrar bu scripti çalıştırın.{RESET}")
         choice = input("Yine de devam etmek istiyor musunuz? (Sistem python'una kurar) [E/H]: ")
-        if choice.lower() != 'e':
+        if choice.lower() != "e":
             sys.exit(0)
-    
+
     # 2. Kütüphaneleri Yükle
     install_requirements()
 
@@ -909,13 +920,13 @@ if __name__ == "__main__":
 
     # 3. Forge Kur
     install_forge()
-    
+
     # 4. Modeli İndir
     install_sd_model()
 
     # 4.1 Optional Quality Pack (GFPGAN, ADetailer, ESRGAN, ControlNet)
     maybe_install_quality_pack()
-    
+
     # 5. Ollama Hazırla
     install_ollama_model()
 

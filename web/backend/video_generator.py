@@ -6,7 +6,6 @@ import textwrap
 import time
 import uuid
 from pathlib import Path
-from typing import Optional, Tuple
 
 from core.clients.llm import get_llm_service, unload_ollama
 from core.clients.sd_client import resim_ciz
@@ -50,7 +49,7 @@ def _report(progress_callback, task: str, percent: int) -> None:
         progress_callback(task)
 
 
-def _resolve_video_tts_paths() -> Tuple[str, str, str]:
+def _resolve_video_tts_paths() -> tuple[str, str, str]:
     """
     Resolve TTS model for video narration.
     Priority:
@@ -177,7 +176,7 @@ def _ffmpeg_escape_path(path: Path) -> str:
     return raw
 
 
-def _resolve_subtitle_font_path() -> Optional[Path]:
+def _resolve_subtitle_font_path() -> Path | None:
     candidates = [
         Path(os.environ.get("VIDEO_SUBTITLE_FONT", "")).expanduser() if os.environ.get("VIDEO_SUBTITLE_FONT") else None,
         Path("C:/Windows/Fonts/arial.ttf"),
@@ -190,7 +189,7 @@ def _resolve_subtitle_font_path() -> Optional[Path]:
     return None
 
 
-def _write_subtitle_text_file(text: str, temp_dir: Path) -> Optional[Path]:
+def _write_subtitle_text_file(text: str, temp_dir: Path) -> Path | None:
     wrapped = _format_subtitle_text(text)
     if not wrapped:
         return None
@@ -283,10 +282,35 @@ def _group_words_into_chunks(word_timestamps, words_per_chunk: int = 4):
 
     # Tokens that signal a natural break *before* them
     BREAK_BEFORE = {
-        "and", "but", "or", "so", "yet", "while", "as", "that", "which",
-        "where", "when", "who", "because", "although", "however",
-        "in", "on", "at", "for", "with", "from", "to", "by",
-        "about", "after", "before", "during", "over", "under",
+        "and",
+        "but",
+        "or",
+        "so",
+        "yet",
+        "while",
+        "as",
+        "that",
+        "which",
+        "where",
+        "when",
+        "who",
+        "because",
+        "although",
+        "however",
+        "in",
+        "on",
+        "at",
+        "for",
+        "with",
+        "from",
+        "to",
+        "by",
+        "about",
+        "after",
+        "before",
+        "during",
+        "over",
+        "under",
     }
 
     chunks = []
@@ -363,8 +387,8 @@ def _write_timed_subtitle_ass(
     frame_width: int,
     frame_height: int,
     temp_dir: Path,
-    audio_path: Optional[Path] = None,
-) -> Optional[Path]:
+    audio_path: Path | None = None,
+) -> Path | None:
     """
     Generate a native ASS subtitle file.
     Strategy:
@@ -387,7 +411,7 @@ def _write_timed_subtitle_ass(
             if chunks:
                 # Professional padding: show subtitle slightly before speech
                 # starts and keep it slightly after speech ends.
-                PRE_PAD = 0.08   # seconds before first word
+                PRE_PAD = 0.08  # seconds before first word
                 POST_PAD = 0.12  # seconds after last word
                 duration = max(float(duration_seconds or 0.0), 1.0)
                 padded = []
@@ -395,7 +419,7 @@ def _write_timed_subtitle_ass(
                     s = max(0.0, start_s - PRE_PAD)
                     e = min(duration, end_s + POST_PAD)
                     padded.append((s, e, chunk_text))
-                
+
                 # Clamp overlaps: PRIORITIZE NEXT START.
                 # If current chunk ends after next chunk starts, trim current chunk.
                 # Do NOT delay the start of the next chunk.
@@ -408,9 +432,7 @@ def _write_timed_subtitle_ass(
                 for start_s, end_s, chunk_text in padded:
                     t_start = _format_ass_timestamp(start_s)
                     t_end = _format_ass_timestamp(end_s)
-                    events.append(
-                        f"Dialogue: 0,{t_start},{t_end},Default,,0,0,0,,{chunk_text}"
-                    )
+                    events.append(f"Dialogue: 0,{t_start},{t_end},Default,,0,0,0,,{chunk_text}")
                 whisper_ok = True
                 print(f"[Subtitle] Whisper alignment OK: {len(padded)} chunks.")
 
@@ -448,7 +470,7 @@ def _write_timed_subtitle_ass(
     return path
 
 
-def _build_ass_subtitle_filter(subtitle_file: Optional[Path], frame_height: int) -> str:
+def _build_ass_subtitle_filter(subtitle_file: Path | None, frame_height: int) -> str:
     """Build FFmpeg subtitles filter for a native ASS file (no force_style needed)."""
     if not subtitle_file or not subtitle_file.exists():
         return ""
@@ -456,7 +478,7 @@ def _build_ass_subtitle_filter(subtitle_file: Optional[Path], frame_height: int)
     return f"subtitles='{file_esc}'"
 
 
-def _build_subtitle_drawtext_filter(subtitle_file: Optional[Path], frame_height: int) -> str:
+def _build_subtitle_drawtext_filter(subtitle_file: Path | None, frame_height: int) -> str:
     if not subtitle_file or not subtitle_file.exists():
         return ""
     textfile_esc = _ffmpeg_escape_path(subtitle_file)
@@ -538,7 +560,7 @@ def create_video_clip_ffmpeg(
     audio_path: Path,
     output_path: Path,
     temp_dir: Path,
-    subtitle_text: Optional[str] = None,
+    subtitle_text: str | None = None,
 ) -> bool:
     side = min(int(SD_WIDTH), int(SD_HEIGHT))
     width = side
@@ -552,7 +574,9 @@ def create_video_clip_ffmpeg(
     subtitle_mode = "none"
     audio_seconds = get_media_duration_seconds(audio_path)
 
-    timed_subtitle_file = _write_timed_subtitle_ass(subtitle_text or "", audio_seconds, width, height, temp_dir, audio_path=audio_path)
+    timed_subtitle_file = _write_timed_subtitle_ass(
+        subtitle_text or "", audio_seconds, width, height, temp_dir, audio_path=audio_path
+    )
     if timed_subtitle_file:
         subtitle_files.append(timed_subtitle_file)
     subtitle_filter = _build_ass_subtitle_filter(timed_subtitle_file, height)
@@ -620,9 +644,7 @@ def create_video_clip_ffmpeg(
                             sf.unlink()
                         except Exception:
                             pass
-                print(
-                    f"Timed subtitles failed, static subtitles used. Error: {result.stderr}"
-                )
+                print(f"Timed subtitles failed, static subtitles used. Error: {result.stderr}")
                 return True
 
     # If subtitles fail, retry once without subtitle filter.
@@ -638,9 +660,7 @@ def create_video_clip_ffmpeg(
                 except Exception:
                     pass
         if fallback_result.returncode == 0 and os.path.exists(output_path):
-            print(
-                f"Subtitle render failed, fallback clip generated without subtitles. Error: {result.stderr}"
-            )
+            print(f"Subtitle render failed, fallback clip generated without subtitles. Error: {result.stderr}")
             return True
 
         print(f"FFmpeg clip error: {fallback_result.stderr or result.stderr}")

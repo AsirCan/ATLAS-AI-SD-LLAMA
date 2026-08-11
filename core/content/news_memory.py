@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 import time
-from typing import Dict, Iterable, Optional, Set
+from collections.abc import Iterable
 
 from core.runtime.config import (
     NEWS_MEMORY_BACKEND,
@@ -30,7 +30,7 @@ def _safe_mkdir_for_file(path: str) -> None:
         os.makedirs(parent, exist_ok=True)
 
 
-def _normalize_row(title_norm: str, title: str, source: Optional[str], used_at: int) -> Dict[str, object]:
+def _normalize_row(title_norm: str, title: str, source: str | None, used_at: int) -> dict[str, object]:
     return {
         "title_norm": title_norm,
         "title": title,
@@ -39,9 +39,9 @@ def _normalize_row(title_norm: str, title: str, source: Optional[str], used_at: 
     }
 
 
-def _build_rows(titles: Iterable[str], source: str = None) -> Dict[str, Dict[str, object]]:
+def _build_rows(titles: Iterable[str], source: str = None) -> dict[str, dict[str, object]]:
     now = int(time.time())
-    rows: Dict[str, Dict[str, object]] = {}
+    rows: dict[str, dict[str, object]] = {}
     for t in titles:
         if not t:
             continue
@@ -83,12 +83,12 @@ def _connect() -> sqlite3.Connection:
 # ------------------------------
 # JSON backend
 # ------------------------------
-def _json_read_rows() -> Dict[str, Dict[str, object]]:
+def _json_read_rows() -> dict[str, dict[str, object]]:
     if not os.path.exists(NEWS_MEMORY_JSON):
         return {}
 
     try:
-        with open(NEWS_MEMORY_JSON, "r", encoding="utf-8") as f:
+        with open(NEWS_MEMORY_JSON, encoding="utf-8") as f:
             payload = json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
@@ -97,7 +97,7 @@ def _json_read_rows() -> Dict[str, Dict[str, object]]:
     if not isinstance(raw_rows, list):
         return {}
 
-    rows: Dict[str, Dict[str, object]] = {}
+    rows: dict[str, dict[str, object]] = {}
     for item in raw_rows:
         if not isinstance(item, dict):
             continue
@@ -116,11 +116,9 @@ def _json_read_rows() -> Dict[str, Dict[str, object]]:
     return rows
 
 
-def _json_write_rows(rows: Dict[str, Dict[str, object]]) -> None:
+def _json_write_rows(rows: dict[str, dict[str, object]]) -> None:
     _safe_mkdir_for_file(NEWS_MEMORY_JSON)
-    payload = {
-        "used_news": sorted(rows.values(), key=lambda x: int(x["used_at"]), reverse=True)
-    }
+    payload = {"used_news": sorted(rows.values(), key=lambda x: int(x["used_at"]), reverse=True)}
     with open(NEWS_MEMORY_JSON, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
@@ -152,7 +150,7 @@ def normalize_title(title: str) -> str:
     return " ".join(title.lower().split()) if title else ""
 
 
-def get_used_title_set(ttl_seconds: int) -> Set[str]:
+def get_used_title_set(ttl_seconds: int) -> set[str]:
     cutoff = int(time.time()) - ttl_seconds
     backend = _backend()
 
@@ -166,22 +164,14 @@ def get_used_title_set(ttl_seconds: int) -> Set[str]:
 
     if backend == "json":
         rows = _json_read_rows()
-        return {
-            key
-            for key, row in rows.items()
-            if int(row.get("used_at", 0)) >= cutoff
-        }
+        return {key for key, row in rows.items() if int(row.get("used_at", 0)) >= cutoff}
 
     collection = _mongo_collection()
     docs = collection.find(
         {"used_at": {"$gte": cutoff}},
         {"_id": 0, "title_norm": 1},
     )
-    return {
-        str(doc.get("title_norm", "")).strip()
-        for doc in docs
-        if str(doc.get("title_norm", "")).strip()
-    }
+    return {str(doc.get("title_norm", "")).strip() for doc in docs if str(doc.get("title_norm", "")).strip()}
 
 
 def mark_used_titles(titles: Iterable[str], source: str = None) -> None:
@@ -192,10 +182,7 @@ def mark_used_titles(titles: Iterable[str], source: str = None) -> None:
     backend = _backend()
 
     if backend == "sqlite":
-        sql_rows = [
-            (row["title_norm"], row["title"], row["source"], row["used_at"])
-            for row in rows.values()
-        ]
+        sql_rows = [(row["title_norm"], row["title"], row["source"], row["used_at"]) for row in rows.values()]
         with _connect() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO used_news (title_norm, title, source, used_at) VALUES (?, ?, ?, ?)",
@@ -229,9 +216,7 @@ def prune_expired(ttl_seconds: int) -> None:
 
     if backend == "json":
         rows = _json_read_rows()
-        pruned = {
-            key: row for key, row in rows.items() if int(row.get("used_at", 0)) >= cutoff
-        }
+        pruned = {key: row for key, row in rows.items() if int(row.get("used_at", 0)) >= cutoff}
         _json_write_rows(pruned)
         return
 
