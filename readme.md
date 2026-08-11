@@ -1,5 +1,7 @@
 # Atlas Assistant (Web + Otonom Ajan)
 
+[![Tests](https://github.com/AsirCan/ATLAS-AI-SD-LLAMA/actions/workflows/tests.yml/badge.svg)](https://github.com/AsirCan/ATLAS-AI-SD-LLAMA/actions/workflows/tests.yml)
+
 Bu repo, web arayüzlü bir sesli asistan/üretim stüdyosu ve Instagram için **otonom (multi-agent) içerik üretim ajanı** içerir.
 
 ## Özellikler
@@ -172,6 +174,43 @@ python run.py --agent
 ```powershell
 python run.py --agent --live
 ```
+
+## Testler
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Testler **ağa, GPU'ya, Ollama'ya, Stable Diffusion'a veya Instagram'a hiç dokunmaz.**
+Ağır bağımlılıklar (`instagrapi`, `feedparser`, `speech_recognition`, `keyring`)
+`tests/conftest.py` içinde stub'lanır; veritabanı yolları geçici klasöre yönlendirilir.
+Bu yüzden `requirements-dev.txt`, `requirements.txt`'in tamamını gerektirmez.
+
+Kapsam raporu için:
+
+```bash
+pytest --cov=core --cov=web/backend --cov-report=term-missing
+```
+
+Neyin test edildiği:
+
+| Alan | Dosya |
+|---|---|
+| Risk filtresi (blacklist/eşik/whitelist) | `tests/test_risk_agent.py` |
+| Haber toplama ve skorlama formülü | `tests/test_news_agent.py` |
+| SD prompt normalizasyonu | `tests/test_visual_agent.py` |
+| Pipeline guard'ları ve iptal akışı | `tests/test_orchestrator.py` |
+| LLM JSON üretimi, retry, iptal | `tests/test_llm_service.py` |
+| TTL tabanlı haber hafızası | `tests/test_news_memory.py` |
+| API token koruması, CORS, sır sızıntısı | `tests/test_backend_api.py` |
+| Görsel sunucusu izolasyonu | `tests/test_image_server.py` |
+| Legacy instagrapi kapısı | `tests/test_insta_legacy.py` |
+| Caption hashtag biçimlendirme | `tests/test_caption_format.py` |
+| API token üretimi/doğrulaması | `tests/test_api_auth.py` |
+
+CI (`.github/workflows/tests.yml`) her PR'da Python 3.10/3.11/3.12 üzerinde
+testleri ve ayrıca frontend build'ini çalıştırır.
 
 ## API (kısa özet)
 - **Chat**: `POST /api/chat`

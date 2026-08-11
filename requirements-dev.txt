@@ -1,0 +1,28 @@
+# Test bagimliliklari.
+#
+# Bu dosya requirements.txt'in tamamini gerektirmez: testler agir ML/servis
+# paketlerine (instagrapi, faster-whisper, piper-tts, feedparser ...)
+# dokunmaz, bunlar tests/conftest.py icinde stub'lanir.
+#
+# Kurulum:
+#   pip install -r requirements-dev.txt
+
+pytest>=8.0
+pytest-cov>=5.0
+
+# Test edilen kodun gercekten ihtiyac duydugu hafif paketler
+fastapi
+httpx
+requests
+python-dotenv
+
+# main.py ve image_server.py modul seviyesinde import ediyor
+uvicorn
+
+# main.py'de File(...) kullanan uclar var; FastAPI bunu import aninda arar
+python-multipart
+
+# insta_client.py modul seviyesinde "from PIL import Image" yapiyor.
+# NOT: Pillow requirements.txt'te DOGRUDAN listelenmiyor; su an yalnizca
+# instagrapi uzerinden gecisli olarak geliyor. Bkz. issue #6.
+Pillow
