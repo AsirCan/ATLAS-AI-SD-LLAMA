@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict
+from typing import Any
 
 from core.agents.base import BaseAgent, CancelledError
 from core.clients.llm import unload_ollama
@@ -19,7 +19,7 @@ class VisualDirectorAgent(BaseAgent):
         "overexposed, underexposed"
     )
 
-    def _build_prompt_request(self, target_news: Dict[str, Any]) -> str:
+    def _build_prompt_request(self, target_news: dict[str, Any]) -> str:
         title = str(target_news.get("title", "")).strip()
         summary = str(target_news.get("summary", "")).strip()
         return (
@@ -60,7 +60,7 @@ class VisualDirectorAgent(BaseAgent):
                 lowered = output.lower()
         return output
 
-    def _normalize_prompt(self, prompt: str, target_news: Dict[str, Any]) -> str:
+    def _normalize_prompt(self, prompt: str, target_news: dict[str, Any]) -> str:
         cleaned = (prompt or "").replace("\n", " ").strip()
         if ":" in cleaned and len(cleaned.split(":", 1)[0]) < 24:
             cleaned = cleaned.split(":", 1)[1].strip()
@@ -79,7 +79,7 @@ class VisualDirectorAgent(BaseAgent):
             cleaned = cleaned[: self.PROMPT_MAX_CHARS].rstrip(", ")
         return cleaned
 
-    def _fallback_retry_prompt(self, target_news: Dict[str, Any]) -> str:
+    def _fallback_retry_prompt(self, target_news: dict[str, Any]) -> str:
         title = str(target_news.get("title", "")).strip().replace('"', "")
         return (
             f"A photorealistic cinematic news scene inspired by '{title}', "

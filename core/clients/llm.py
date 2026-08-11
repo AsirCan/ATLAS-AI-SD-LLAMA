@@ -1,8 +1,9 @@
-﻿import json
+import json
 import subprocess
 import threading
 import time
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import requests
 
@@ -50,7 +51,7 @@ def llm_answer(msg: str, system_msg: str = None) -> str:
             return get_llm_service().ask(msg, system=final_system_prompt, timeout=180, retries=1)
 
         except Exception as e:
-            print(RED + f"[OLLAMA HATASI - Deneme {i+1}/{max_retries}] {e}")
+            print(RED + f"[OLLAMA HATASI - Deneme {i + 1}/{max_retries}] {e}")
             if "Cancelled during LLM request" in str(e):
                 return "İstek iptal edildi."
             if "500" in str(e) or "Connection refused" in str(e):
@@ -83,6 +84,7 @@ def ollama_warmup():
 
 
 # llm.py dosyasının en altına ekle:
+
 
 def unload_ollama():
     """
@@ -152,8 +154,8 @@ class LLMService:
         except Exception:
             return False
 
-    def _post_with_cancel(self, payload: Dict[str, Any], timeout: int) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+    def _post_with_cancel(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+        result: dict[str, Any] = {}
         done = threading.Event()
 
         def _worker():
@@ -179,17 +181,17 @@ class LLMService:
 
     def chat(
         self,
-        messages: Sequence[Dict[str, str]],
+        messages: Sequence[dict[str, str]],
         *,
-        format: Optional[Literal["json"]] = None,
+        format: Literal["json"] | None = None,
         timeout: int = 60,
         retries: int = 3,
     ) -> str:
-        payload: Dict[str, Any] = {"model": self.model, "messages": list(messages), "stream": False}
+        payload: dict[str, Any] = {"model": self.model, "messages": list(messages), "stream": False}
         if format:
             payload["format"] = format
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for _ in range(retries):
             if self._is_cancelled():
                 raise Exception("Cancelled during LLM request")
@@ -207,12 +209,12 @@ class LLMService:
         self,
         prompt: str,
         *,
-        system: Optional[str] = None,
+        system: str | None = None,
         timeout: int = 60,
         retries: int = 3,
-        format: Optional[Literal["json"]] = None,
+        format: Literal["json"] | None = None,
     ) -> str:
-        messages: List[Dict[str, str]] = []
+        messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -230,17 +232,15 @@ class LLMService:
         self,
         prompt: str,
         *,
-        schema: Dict[str, Any],
-        system: Optional[str] = None,
+        schema: dict[str, Any],
+        system: str | None = None,
         timeout: int = 60,
         retries: int = 3,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         schema_hint = json.dumps(schema, ensure_ascii=False)
-        final_prompt = (
-            f"{prompt}\n\nIMPORTANT: Return ONLY a valid JSON object matching this schema: {schema_hint}"
-        )
+        final_prompt = f"{prompt}\n\nIMPORTANT: Return ONLY a valid JSON object matching this schema: {schema_hint}"
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(retries):
             if self._is_cancelled():
                 raise Exception("Cancelled during LLM request")
@@ -257,7 +257,7 @@ class LLMService:
                 if "Cancelled during LLM request" in str(e):
                     raise
                 last_exc = e
-                print(f"LLM JSON parse error (Attempt {attempt+1}/{retries}): {e}")
+                print(f"LLM JSON parse error (Attempt {attempt + 1}/{retries}): {e}")
                 time.sleep(1)
         raise Exception(f"Failed to generate valid JSON from LLM after {retries} retries: {last_exc}")
 
@@ -281,7 +281,7 @@ class LLMService:
         return False
 
     # Backwards-compat for agent code already using generate_response(prompt, schema=...)
-    def generate_response(self, prompt: str, schema: Optional[Dict] = None, retries: int = 3) -> Dict[str, Any]:
+    def generate_response(self, prompt: str, schema: dict | None = None, retries: int = 3) -> dict[str, Any]:
         if schema:
             return self.generate_json(prompt, schema=schema, retries=retries)
         return {"response": self.ask(prompt, retries=retries)}

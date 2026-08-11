@@ -1,4 +1,5 @@
 import { AppProvider, useAppContext } from './context/AppContext';
+import ErrorBoundary from './ErrorBoundary.jsx';
 import InteractiveBackground from './components/InteractiveBackground';
 import Sidebar from './components/Sidebar';
 import GallerySidebar from './components/GallerySidebar';
@@ -42,11 +43,17 @@ function AppLayout() {
                 <div className="flex-1 flex flex-col relative h-full overflow-hidden">
                     <main className="flex-1 flex flex-col relative z-10 p-6 md:p-10 h-full">
                         {appMode === 'studio' ? (
-                            <StudioPage />
+                            <ErrorBoundary>
+                                <StudioPage />
+                            </ErrorBoundary>
                         ) : appMode === 'video' ? (
-                            <VideoPage />
+                            <ErrorBoundary>
+                                <VideoPage />
+                            </ErrorBoundary>
                         ) : (
-                            <ChatPage />
+                            <ErrorBoundary>
+                                <ChatPage />
+                            </ErrorBoundary>
                         )}
                     </main>
                 </div>

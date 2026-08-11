@@ -1,5 +1,5 @@
 import os
-import time
+
 from dotenv import load_dotenv
 
 # RENKLER
@@ -20,8 +20,8 @@ load_dotenv()
 SD_WIDTH = 1024
 SD_HEIGHT = 1024
 
-SD_STEPS = 30          # kalite / süre dengesi - orta yol 
-SD_CFG_SCALE = 7      # prompta bağlılık
+SD_STEPS = 30  # kalite / süre dengesi - orta yol
+SD_CFG_SCALE = 7  # prompta bağlılık
 SD_SAMPLER = "DPM++ 2M Karras"
 SD_RESTORE_FACES = os.getenv("SD_RESTORE_FACES", "1").strip() == "1"
 SD_MAX_PROMPT_CHARS = int(os.getenv("SD_MAX_PROMPT_CHARS", "700"))
@@ -66,13 +66,17 @@ INSTA_SESSIONID = os.getenv("INSTA_SESSIONID")
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _news_memory_db_raw = os.getenv("NEWS_MEMORY_DB_PATH", os.path.join("data", "news_memory.db"))
-NEWS_MEMORY_DB = _news_memory_db_raw if os.path.isabs(_news_memory_db_raw) else os.path.join(BASE_DIR, _news_memory_db_raw)
+NEWS_MEMORY_DB = (
+    _news_memory_db_raw if os.path.isabs(_news_memory_db_raw) else os.path.join(BASE_DIR, _news_memory_db_raw)
+)
 
 # sqlite | json | mongodb
 NEWS_MEMORY_BACKEND = os.getenv("NEWS_MEMORY_BACKEND", "sqlite").strip().lower()
 
 _news_memory_json_raw = os.getenv("NEWS_MEMORY_JSON_PATH", os.path.join("data", "news_memory.json"))
-NEWS_MEMORY_JSON = _news_memory_json_raw if os.path.isabs(_news_memory_json_raw) else os.path.join(BASE_DIR, _news_memory_json_raw)
+NEWS_MEMORY_JSON = (
+    _news_memory_json_raw if os.path.isabs(_news_memory_json_raw) else os.path.join(BASE_DIR, _news_memory_json_raw)
+)
 
 NEWS_MEMORY_MONGO_URI = os.getenv("NEWS_MEMORY_MONGO_URI", "mongodb://localhost:27017")
 NEWS_MEMORY_MONGO_DB = os.getenv("NEWS_MEMORY_MONGO_DB", "atlas_ai")
@@ -126,6 +130,5 @@ RISK_CATEGORY_THRESHOLDS = {
 
 # Carousel consistency
 CAROUSEL_BASE_STYLE = (
-    "consistent camera angle, 35mm lens, soft cinematic lighting, "
-    "subtle film grain, balanced color grading, no text"
+    "consistent camera angle, 35mm lens, soft cinematic lighting, subtle film grain, balanced color grading, no text"
 )

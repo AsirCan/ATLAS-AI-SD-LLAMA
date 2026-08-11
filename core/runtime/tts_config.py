@@ -19,6 +19,7 @@ PIPER_CONFIG = _resolve_model_path("PIPER_CONFIG", os.path.join("models", "tr_TR
 PIPER_EN_MODEL = _resolve_model_path("PIPER_EN_MODEL", os.path.join("models", "en_US-lessac-medium.onnx"))
 PIPER_EN_CONFIG = _resolve_model_path("PIPER_EN_CONFIG", os.path.join("models", "en_US-lessac-medium.onnx.json"))
 
+
 # Piper çalıştırılabilir dosyası
 #
 # Not: Windows'ta pip ile kurulan bazı `piper-tts` sürümleri (özellikle 1.4.x)
@@ -60,4 +61,3 @@ def _resolve_piper_bin() -> str:
 
 
 PIPER_BIN = _resolve_piper_bin()
-

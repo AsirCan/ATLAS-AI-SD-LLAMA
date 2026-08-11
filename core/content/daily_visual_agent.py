@@ -1,7 +1,8 @@
-import time
-import feedparser
 import difflib
 import random
+import time
+
+import feedparser
 
 from core.clients.llm import get_llm_service, unload_ollama
 from core.clients.sd_client import resim_ciz
@@ -9,9 +10,10 @@ from core.content.news_fetcher import RSS_SOURCES
 from core.content.news_memory import get_used_title_set, mark_used_titles, normalize_title, prune_expired
 from core.runtime.config import USED_NEWS_TTL_DAYS
 
+
 def dunya_gundemini_getir(limit=100):
     tum_basliklar = []
-    
+
     # Tüm kaynakları gez
     for url in RSS_SOURCES:
         try:
@@ -28,9 +30,10 @@ def dunya_gundemini_getir(limit=100):
 
     # Listeyi karıştır ki hep aynı kaynaktan gelmesin
     random.shuffle(tum_basliklar)
-    
+
     # Limiti uygula
     return tum_basliklar[:limit]
+
 
 # 👇 1. AŞAMA: HABER SEÇME 👇
 def en_iyi_uc_haberi_sec(haber_listesi_string):
@@ -52,6 +55,7 @@ def en_iyi_uc_haberi_sec(haber_listesi_string):
     except Exception as e:
         print(f"LLM Error: {e}")
         return "- A conceptual global tech breakthrough\n- A mysterious space discovery\n- A futuristic city innovation"
+
 
 # 👇 2. AŞAMA: GÖRSEL PROMPT HAZIRLAMA 👇
 def sahneyi_birlestir(secilen_3_haber):
@@ -77,13 +81,14 @@ def sahneyi_birlestir(secilen_3_haber):
         print(f"LLM Error: {e}")
         return "A conceptual image showing diverse global events merging together."
 
+
 # 👇 ANA FONKSİYON 👇
 def gunluk_instagram_gorseli_uret(log_callback=print):
-    
+
     # 1. Haberleri Çek
-    log_callback(f"🌍 Global gündem taranıyor...") 
+    log_callback("🌍 Global gündem taranıyor...")
     ham_liste = dunya_gundemini_getir(limit=100)
-    
+
     if not ham_liste:
         log_callback("⚠️ Haber kaynağına ulaşılamadı.")
         return False, None, "No news"
@@ -92,14 +97,14 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
     ttl_seconds = USED_NEWS_TTL_DAYS * 24 * 60 * 60
     prune_expired(ttl_seconds)
     kullanilmis_set = get_used_title_set(ttl_seconds)
-    
+
     taze_liste = []
     for haber in ham_liste:
         clean_haber = haber.strip()
         # Eğer haber daha önce kullanılmamışsa ekle
         if normalize_title(clean_haber) not in kullanilmis_set:
             taze_liste.append(f"- {clean_haber}")
-    
+
     log_callback(f"📉 Filtreleme Sonucu: {len(ham_liste)} haberden {len(taze_liste)} tanesi geriye kaldı.")
 
     # EĞER YENİ HABER YOKSA İŞLEMİ DURDUR (Eskiden burası siliyordu, artık silmiyor)
@@ -111,7 +116,7 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
     taze_liste_str = "\n".join(taze_liste)
 
     # 2. Üç Haberi Seç
-    log_callback(f"🤔 3 Haber seçiliyor...")
+    log_callback("🤔 3 Haber seçiliyor...")
     secilen_uc_str = en_iyi_uc_haberi_sec(taze_liste_str)
     log_callback(f"📰 Seçilen 3 Haber:\n{secilen_uc_str}")
 
@@ -119,13 +124,13 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
     # --- SEÇİLENLERİ KAYDET (DÜZELTME: Orijinal başlığı bul) ---
     secilenler_liste = secilen_uc_str.split("\n")
     final_save_list = []
-    
+
     for item in secilenler_liste:
         clean_item = item.replace("-", "").strip()
         # Orijinal listeden (ham_liste) en benzerini bul
         # cutoff=0.5: %50 benzerlik yeterli (LLM bazen kelime değiştirir)
         matches = difflib.get_close_matches(clean_item, ham_liste, n=1, cutoff=0.5)
-        
+
         if matches:
             # Eşleşme bulunduysa ORİJİNALİNİ kaydet (Böylece filtre bir dahakine çalışır)
             final_save_list.append(matches[0])
@@ -138,27 +143,23 @@ def gunluk_instagram_gorseli_uret(log_callback=print):
     # --------------------------
 
     # 3. Sahneyi Birleştir
-    log_callback(f"🧠 Hikaye kurgulanıyor...")
+    log_callback("🧠 Hikaye kurgulanıyor...")
     birlesik_sahne_promptu = sahneyi_birlestir(secilen_uc_str)
-    
+
     if len(birlesik_sahne_promptu) < 20:
         birlesik_sahne_promptu = "A complex, cinematic photograph showing a juxtaposition of advanced technology, nature, and society, detailed, 8k."
     else:
-        log_callback(f"🇬🇧 Prompt: {birlesik_sahne_promptu[:100]}...") 
+        log_callback(f"🇬🇧 Prompt: {birlesik_sahne_promptu[:100]}...")
 
     # 4. VRAM Temizliği
     unload_ollama()
-    time.sleep(1.5) 
+    time.sleep(1.5)
 
     # 5. Çizim
     log_callback("🎨 Görsel oluşturuluyor...")
-    
-    success, file_path, used_prompt = resim_ciz(birlesik_sahne_promptu)
-    
-    extra_data = {
-        "prompt": used_prompt,
-        "news": secilen_uc_str
-    }
-    
-    return success, file_path, extra_data
 
+    success, file_path, used_prompt = resim_ciz(birlesik_sahne_promptu)
+
+    extra_data = {"prompt": used_prompt, "news": secilen_uc_str}
+
+    return success, file_path, extra_data

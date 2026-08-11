@@ -301,7 +301,7 @@ export default function StudioPage() {
                         <div className="relative group rounded-2xl overflow-hidden shadow-2xl border dark:border-white/10 border-gray-200 h-full">
                             <img src={generatedNews.image_url} alt="Generated" className="w-full h-full object-cover" />
                             <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                <a href={generatedNews.image_url} target="_blank" className="text-white underline font-bold px-6 py-3 bg-black/50 rounded-xl backdrop-blur-md border border-white/10 hover:bg-white/10 transition-colors">Tam Boyut Gör</a>
+                                <a href={generatedNews.image_url} target="_blank" rel="noreferrer" className="text-white underline font-bold px-6 py-3 bg-black/50 rounded-xl backdrop-blur-md border border-white/10 hover:bg-white/10 transition-colors">Tam Boyut Gör</a>
                             </div>
                             {generatedNews.duration && (
                                 <div className="absolute top-4 right-4 bg-black/60 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-md font-mono border border-white/10 z-20">

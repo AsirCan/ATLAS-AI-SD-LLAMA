@@ -1,33 +1,36 @@
-﻿from core.pipeline.state import PipelineState
-from core.clients.llm import LLMService
+from core.agents.base import CancelledError
+from core.agents.caption_agent import CaptionAgent
+
 # Agents
 from core.agents.news_agent import NewsAgent
 from core.agents.risk_agent import RiskAgent
-from core.agents.visual_agent import VisualDirectorAgent
-from core.agents.caption_agent import CaptionAgent
 from core.agents.scheduler_agent import SchedulerAgent
+from core.agents.visual_agent import VisualDirectorAgent
+
 # Output
 from core.clients.insta_client import login_and_upload
-from core.agents.base import CancelledError
+from core.clients.llm import LLMService
 from core.content.news_memory import mark_used_titles
+from core.pipeline.state import PipelineState
+
 
 class Orchestrator:
     def __init__(self, dry_run: bool = True):
         self.dry_run = dry_run
         self._log_callback = None
         self._cancel_checker = None
-        
+
         # Init Infrastructure
-        self.llm = LLMService() # Uses default from core/clients/llm.py
+        self.llm = LLMService()  # Uses default from core/clients/llm.py
         self.state = PipelineState()
-        
+
         # Init Agents
         self.news_agent = NewsAgent(self.llm)
         self.risk_agent = RiskAgent(self.llm)
         self.visual_agent = VisualDirectorAgent(self.llm)
         self.caption_agent = CaptionAgent(self.llm)
         self.scheduler_agent = SchedulerAgent(self.llm)
-        
+
         # Init IO (Not an Agent)
 
     def set_logger(self, callback):
@@ -72,7 +75,7 @@ class Orchestrator:
         try:
             self._log(f"Starting pipeline. Dry Run: {self.dry_run}")
             self._cancel_guard("start")
-        
+
             # 1. News Gathering
             self._log("Step 1/6: News Gathering")
             self.state = self.news_agent.process(self.state)
@@ -123,23 +126,19 @@ class Orchestrator:
             # Verify invariants one last time
             target_image = self.state.generated_images[0]
             target_caption = self.state.final_caption
-            
+
             self._log("Step 6/6: Publishing")
             self._log(f"Publish preview image: {target_image}")
             self._log(f"Publish time: {self.state.scheduled_time}")
-            
+
             # Execute
             if self.dry_run:
                 self._log("Dry Run: Skipping upload.")
                 result = {"success": True, "message": "Dry Run OK"}
             else:
                 success, msg = login_and_upload(target_image, target_caption)
-                result = {
-                    "success": success,
-                    "message": msg,
-                    "url": "Check Instagram" if success else None
-                }
-            
+                result = {"success": success, "message": msg, "url": "Check Instagram" if success else None}
+
             self.state.upload_status = result
             self._log("Pipeline complete.")
             return self.state
@@ -148,4 +147,3 @@ class Orchestrator:
             # Mark state for callers
             self.state.upload_status = {"success": False, "message": "Cancelled"}
             return self.state
-

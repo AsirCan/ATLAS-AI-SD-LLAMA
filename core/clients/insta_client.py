@@ -1,14 +1,15 @@
 import os
 import time
-import requests
-import base64
 from pathlib import Path
 from urllib.parse import urlparse
+
+import requests
 from instagrapi import Client
-from instagrapi.exceptions import TwoFactorRequired, ChallengeRequired, LoginRequired
+from instagrapi.exceptions import ChallengeRequired, LoginRequired, TwoFactorRequired
+
 from core.clients.llm import llm_answer
 from core.content.caption_format import format_caption_hashtags_bottom
-from core.runtime.config import RED, GREEN, YELLOW, RESET, INSTA_USERNAME, INSTA_SESSIONID
+from core.runtime.config import GREEN, INSTA_SESSIONID, INSTA_USERNAME, RED, RESET, YELLOW
 
 try:
     import keyring
@@ -71,6 +72,7 @@ def _imgbb_api_key() -> str:
     # Keep module constant as fallback for compatibility with existing imports/tests.
     return _cfg("IMGBB_API_KEY", IMGBB_API_KEY)
 
+
 def set_instagram_credentials(username: str, password: str) -> bool:
     """
     Stores Instagram credentials in OS credential store (Windows Credential Manager via keyring).
@@ -84,6 +86,7 @@ def set_instagram_credentials(username: str, password: str) -> bool:
     keyring.set_password(KEYRING_SERVICE, KEYRING_ACTIVE_USER, username)
     keyring.set_password(KEYRING_SERVICE, username, password)
     return True
+
 
 def get_instagram_credentials():
     """
@@ -107,6 +110,7 @@ def get_instagram_credentials():
             password = None
 
     return username, password
+
 
 def _is_graph_api_enabled() -> bool:
     return bool(_cfg("IG_USER_ID") and _cfg("FB_ACCESS_TOKEN"))
@@ -153,6 +157,7 @@ def _legacy_blocked_message() -> str:
         "ALLOW_LEGACY_INSTAGRAPI=1 ekleyin. " + LEGACY_WARNING
     )
 
+
 def _as_public_image_url(image_path_or_url: str) -> str:
     """
     Instagram Graph API needs a publicly reachable URL.
@@ -169,15 +174,13 @@ def _as_public_image_url(image_path_or_url: str) -> str:
                 raise ValueError("Local image URL verildi ama PUBLIC_BASE_URL yok.")
             path = parsed.path or ""
             if path.startswith("/images/"):
-                suffix = path[len("/images/"):]
+                suffix = path[len("/images/") :]
                 return f"{public_base}/images/{suffix}"
         return src
 
     public_base = _cfg("PUBLIC_BASE_URL")
     if not public_base:
-        raise ValueError(
-            "Graph API upload icin PUBLIC_BASE_URL gerekli (or: https://your-domain.com)."
-        )
+        raise ValueError("Graph API upload icin PUBLIC_BASE_URL gerekli (or: https://your-domain.com).")
 
     img_root = Path("generated_images").resolve()
     src_path = Path(src).resolve()
@@ -185,11 +188,10 @@ def _as_public_image_url(image_path_or_url: str) -> str:
     try:
         rel = src_path.relative_to(img_root).as_posix()
     except ValueError as e:
-        raise ValueError(
-            "Graph API local dosya yolu sadece generated_images altindan destekleniyor."
-        ) from e
+        raise ValueError("Graph API local dosya yolu sadece generated_images altindan destekleniyor.") from e
 
     return f"{public_base}/images/{rel}"
+
 
 def _ensure_graph_image_ready(image_path_or_url: str) -> str:
     """
@@ -208,12 +210,14 @@ def _ensure_graph_image_ready(image_path_or_url: str) -> str:
     # Convert unsupported/fragile formats (png/webp/etc.) to jpg in same folder
     try:
         from PIL import Image
+
         converted = src_path.with_name(f"{src_path.stem}_graph.jpg")
         img = Image.open(src_path).convert("RGB")
         img.save(converted, format="JPEG", quality=95)
         return str(converted)
     except Exception as e:
         raise RuntimeError(f"Graph image conversion failed: {e}")
+
 
 def _graph_post(endpoint: str, payload: dict) -> dict:
     ig_graph_version = _cfg("IG_GRAPH_VERSION", "v24.0")
@@ -222,34 +226,34 @@ def _graph_post(endpoint: str, payload: dict) -> dict:
     data = dict(payload)
     data["access_token"] = fb_access_token
     data["access_token"] = fb_access_token
-    
+
     # Retry mechanism for timeouts
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            r = requests.post(url, data=data, timeout=120) # Increased timeout to 120s
+            r = requests.post(url, data=data, timeout=120)  # Increased timeout to 120s
             try:
                 body = r.json()
             except Exception:
                 body = {"raw": r.text}
 
             if not r.ok or "error" in body:
-                # If it's a timeout error from FB side, maybe retry? 
+                # If it's a timeout error from FB side, maybe retry?
                 # For now, just raise if it's an API error
                 raise GraphAPIError(body)
             return body
 
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            print(f"{YELLOW}⚠️ Graph API Timeout/Connection ({attempt+1}/{max_retries}): {e}{RESET}")
+            print(f"{YELLOW}⚠️ Graph API Timeout/Connection ({attempt + 1}/{max_retries}): {e}{RESET}")
             if attempt == max_retries - 1:
                 raise GraphAPIError({"error": {"message": f"Timeout after {max_retries} attempts", "details": str(e)}})
             time.sleep(3)
         except GraphAPIError:
             raise
         except Exception as e:
-             raise GraphAPIError({"error": {"message": f"Unexpected error: {str(e)}"}})
-    
-    return {} # Should not reach here
+            raise GraphAPIError({"error": {"message": f"Unexpected error: {str(e)}"}})
+
+    return {}  # Should not reach here
 
 
 def _discover_ig_user_id() -> str:
@@ -339,9 +343,9 @@ def _upload_temp_public_image(local_image_path: str) -> str:
             with p.open("rb") as f:
                 r = requests.post(
                     "https://api.imgbb.com/1/upload",
-                    data={"key": imgbb_key, "expiration": 600}, # 10dk ömürlü link (Graph API çekene kadar yeter)
+                    data={"key": imgbb_key, "expiration": 600},  # 10dk ömürlü link (Graph API çekene kadar yeter)
                     files={"image": f},
-                    timeout=60
+                    timeout=60,
                 )
             if r.ok:
                 data = r.json().get("data", {})
@@ -397,6 +401,7 @@ def _upload_temp_public_image(local_image_path: str) -> str:
 
     raise RuntimeError("Gorsel icin gecici public URL olusturulamadi (Tum servisler denendi).")
 
+
 def _publish_single_with_graph(image_path_or_url: str, caption: str):
     ig_user_id = _cfg("IG_USER_ID")
     if not ig_user_id:
@@ -447,6 +452,7 @@ def _publish_single_with_graph(image_path_or_url: str, caption: str):
     )
     return published
 
+
 def _publish_album_with_graph(image_paths: list[str], caption: str):
     ig_user_id = _cfg("IG_USER_ID")
     if not ig_user_id:
@@ -486,52 +492,51 @@ def _publish_album_with_graph(image_paths: list[str], caption: str):
     )
     return published
 
+
 def generate_caption_with_llama(prompt_text):
     print(f"{YELLOW}📝 Llama Instagram için açıklama yazıyor...{RESET}")
-    
+
     # Eğer prompt_text bir listeyse (3 haber başlığı gibi), string'e çevirip birleştir
     if isinstance(prompt_text, list):
         prompt_text = "\n".join(prompt_text)
 
     system_instruction = (
-    "You are a minimal and aesthetic Instagram Curator. "
-    "TASK: Write a short, punchy caption for this image.\n\n"
-    
-    f"INPUT NEWS: '{prompt_text}'\n\n"
-    
-    "RULES:\n"
-    "1. MAX 20 WORDS. Be mysterious and cool.\n"
-    "2. No questions. Just a powerful statement.\n"
-    "3. Add 10-15 popular hashtags mixed with niche ones (e.g. #art, #ai, #future, #cyberpunk, #digitalart).\n"
-    "4. Usage of emojis is encouraged but keep it minimal (1-2).\n"
-    "5. Language: ENGLISH."
+        "You are a minimal and aesthetic Instagram Curator. "
+        "TASK: Write a short, punchy caption for this image.\n\n"
+        f"INPUT NEWS: '{prompt_text}'\n\n"
+        "RULES:\n"
+        "1. MAX 20 WORDS. Be mysterious and cool.\n"
+        "2. No questions. Just a powerful statement.\n"
+        "3. Add 10-15 popular hashtags mixed with niche ones (e.g. #art, #ai, #future, #cyberpunk, #digitalart).\n"
+        "4. Usage of emojis is encouraged but keep it minimal (1-2).\n"
+        "5. Language: ENGLISH."
     )
-    
+
     user_input = f"INPUT NEWS:\n{prompt_text}\n\nOUTPUT CAPTION:"
-    
+
     # SYSTEM_PROMPT yerine özel İngilizce prompt gönderiyoruz
     caption = llm_answer(user_input, system_msg=system_instruction)
-    
+
     # ============================================================
     # 🧹TEMİZLİK ROBOTU
     # ============================================================
-    
+
     # 1. "Here is..." ile başlıyorsa iki noktadan sonrasını al (Örnek: "Here is the caption: ...")
     if "Here is" in caption and ":" in caption:
         caption = caption.split(":")[-1]
 
-    # 2. YASAKLI KELİMELER LİSTESİ 
+    # 2. YASAKLI KELİMELER LİSTESİ
     # AI'ın cümle sonuna ekleyebileceği tüm "Ben yaptım, ekledim" kalıpları
     yasakli_ifadeler = [
-        "(Note:",       # Klasik "Note:"
-        "Note:",        # Parantezsiz not
-        "(Added",       # "Added relevant hashtags..."
-        "(I have",      # "I have created..."
-        "(This",        # "This caption is..."
-        "(Here",        # "Here are..."
-        "(Please",      # "Please check..."
-        "**Note",       # Kalın yazılmış not
-        "---"           # Ayırıcı çizgi
+        "(Note:",  # Klasik "Note:"
+        "Note:",  # Parantezsiz not
+        "(Added",  # "Added relevant hashtags..."
+        "(I have",  # "I have created..."
+        "(This",  # "This caption is..."
+        "(Here",  # "Here are..."
+        "(Please",  # "Please check..."
+        "**Note",  # Kalın yazılmış not
+        "---",  # Ayırıcı çizgi
     ]
 
     # Bu ifadelerden hangisini görürse görsün, oradan itibaren cümleyi KESİP ATIYORUZ.
@@ -542,6 +547,7 @@ def generate_caption_with_llama(prompt_text):
 
     # 3. Son rötüşlar (Boşlukları ve tırnakları temizle)
     return caption.strip().strip('"').strip("'")
+
 
 def login_to_instagram():
     cl = Client()
@@ -556,13 +562,12 @@ def login_to_instagram():
         except Exception as e:
             print(f"{YELLOW}SessionID ile giriş başarısız: {e}{RESET}")
 
-
     username, password = get_instagram_credentials()
     if not username or not password:
         print(f"{RED}❌ Instagram kimlik bilgileri bulunamadı.{RESET}")
         print(f"{YELLOW}UI üzerinden 'Instagram Giriş (Kaydet)' yapın veya .env içine INSTA_USERNAME yazın.{RESET}")
         return None
-    
+
     # 1. Kayıtlı oturum varsa yükle ve TEST ET
     if os.path.exists(SESSION_FILE):
         print(f"{YELLOW}🍪 Kayıtlı oturum dosyası bulundu, deneniyor...{RESET}")
@@ -575,25 +580,25 @@ def login_to_instagram():
             print(f"{RED}⚠️ Oturum geçersiz (Hata: {e}), dosya siliniyor...{RESET}")
             try:
                 os.remove(SESSION_FILE)
-            except:
-                pass 
+            except Exception:
+                pass
             print(f"{YELLOW}🔄 Sıfırdan giriş moduna geçiliyor...{RESET}")
 
     # 2. Sıfırdan Giriş
     print(f"{YELLOW}🔐 Şifre ile sıfırdan giriş yapılıyor...{RESET}")
-    
+
     def code_handler(username, choice):
         return input(f"{YELLOW}👉 Instagram KOD istiyor! Telefona bak ve kodu yaz: {RESET}")
 
     try:
         cl.challenge_code_handler = code_handler
         cl.login(username, password)
-    
+
     except TwoFactorRequired:
         print(f"{RED}⚠️ 2FA Kodu Gerekli!{RESET}")
         code = input(f"{YELLOW}👉 Google Authenticator uygulamasındaki 6 haneli kodu gir: {RESET}")
         cl.two_factor_login(code)
-    
+
     except ChallengeRequired:
         print(f"{RED}⚠️ Doğrulama Gerekli!{RESET}")
         code = input(f"{YELLOW}👉 SMS/Mail kodunu gir: {RESET}")
@@ -608,6 +613,7 @@ def login_to_instagram():
     print(f"{GREEN}✅ Giriş başarılı ve yeni oturum kaydedildi.{RESET}")
     return cl
 
+
 def reset_instagram_session() -> bool:
     """Deletes local session file to force re-login."""
     try:
@@ -617,24 +623,26 @@ def reset_instagram_session() -> bool:
     except Exception:
         return False
 
+
 def prepare_insta_caption(prompt_text):
     """
     Sadece caption oluşturur ve döndürür. Yükleme yapmaz.
     UI'da onay göstermek için kullanılır.
     """
     print(f"{YELLOW}⏳ GPU soğuması ve VRAM takası için bekleniyor...{RESET}")
-    time.sleep(4) 
-    
+    time.sleep(4)
+
     caption = generate_caption_with_llama(prompt_text)
     caption = format_caption_hashtags_bottom(caption)
-    
+
     # Ekrana da basalım (log için)
-    print(f"\n{YELLOW}" + "="*50)
-    print(f"📢 OLUŞTURULAN METİN:")
+    print(f"\n{YELLOW}" + "=" * 50)
+    print("📢 OLUŞTURULAN METİN:")
     print(f"{RESET}{caption}")
-    print(f"{YELLOW}" + "="*50 + f"{RESET}\n")
-    
+    print(f"{YELLOW}" + "=" * 50 + f"{RESET}\n")
+
     return caption
+
 
 def login_and_upload(image_path, caption):
     """
@@ -668,16 +676,13 @@ def login_and_upload(image_path, caption):
         cl = login_to_instagram()
         if not cl:
             return False, "Instagram'a giriş yapılamadı."
-        
+
         print("⏳ Instagram'ın sakinleşmesi için 5 saniye bekleniyor...")
-        time.sleep(5) 
+        time.sleep(5)
 
         print(f"{YELLOW}📸 Fotoğraf yükleniyor...{RESET}")
-        media = cl.photo_upload(
-            path=image_path,
-            caption=caption
-        )
-        
+        media = cl.photo_upload(path=image_path, caption=caption)
+
         success_msg = "Fotoğraf başarıyla Instagram'a yüklendi! 🎉"
         print(f"{GREEN}{success_msg} PK: {media.pk}{RESET}")
         return True, success_msg
@@ -687,8 +692,11 @@ def login_and_upload(image_path, caption):
         print(f"{RED}{error_msg}{RESET}")
         return False, error_msg
 
+
 import traceback
+
 from PIL import Image
+
 
 def login_and_upload_album(image_paths, caption):
     """
@@ -729,7 +737,7 @@ def login_and_upload_album(image_paths, caption):
 
     # Validate and Convert to JPG
     ready_paths = []
-    converted_files = [] # Silmek için tutuyoruz
+    converted_files = []  # Silmek için tutuyoruz
 
     try:
         for p in image_paths:
@@ -737,19 +745,19 @@ def login_and_upload_album(image_paths, caption):
                 # Convert to JPG
                 try:
                     img = Image.open(p)
-                    rgb_im = img.convert('RGB')
-                    
+                    rgb_im = img.convert("RGB")
+
                     # Orijinal ismine _insta.jpg ekle
                     base_name = os.path.basename(p)
                     new_name = os.path.splitext(base_name)[0] + "_insta.jpg"
                     save_path = os.path.join(temp_dir, new_name)
-                    
+
                     rgb_im.save(save_path, quality=95)
                     ready_paths.append(save_path)
                     converted_files.append(save_path)
                 except Exception as e:
                     print(f"{RED}⚠️ Resim dönüştürme hatası ({p}): {e}{RESET}")
-    
+
         if len(ready_paths) == 0:
             return False, "Hata: Hiçbir resim işlenemedi."
 
@@ -757,20 +765,17 @@ def login_and_upload_album(image_paths, caption):
         cl = login_to_instagram()
         if not cl:
             return False, "Instagram'a giriş yapılamadı."
-        
+
         print("⏳ Instagram'ın sakinleşmesi için 5 saniye bekleniyor...")
-        time.sleep(5) 
+        time.sleep(5)
 
         print(f"{YELLOW}📸 Albüm (Carousel) yükleniyor ({len(ready_paths)} resim)...{RESET}")
-        
-        media = cl.album_upload(
-            paths=ready_paths,
-            caption=caption
-        )
-        
+
+        media = cl.album_upload(paths=ready_paths, caption=caption)
+
         success_msg = "Albüm başarıyla Instagram'a yüklendi! 🎉"
         print(f"{GREEN}{success_msg} PK: {media.pk}{RESET}")
-        
+
         return True, success_msg
 
     except Exception as e:
@@ -779,24 +784,23 @@ def login_and_upload_album(image_paths, caption):
         trace = traceback.format_exc()
         print(f"{RED}❌ Instagram Albüm yükleme hatası detaylı: {err_msg}{RESET}")
         print(f"{RED}{trace}{RESET}")
-        
+
         if "Unknown" in err_msg:
-             return False, f"Bilinmeyen hata (Format sorunu olabilir). Loglara bakınız."
-        
+            return False, "Bilinmeyen hata (Format sorunu olabilir). Loglara bakınız."
+
         return False, f"Yükleme hatası: {err_msg}"
-        
+
     finally:
         # Temizlik: Dönüştürülen dosyaları sil
         for f in converted_files:
             try:
                 if os.path.exists(f):
                     os.remove(f)
-            except:
+            except Exception:
                 pass
         # Temp klasörü boşsa sil
         try:
             if os.path.exists(temp_dir) and not os.listdir(temp_dir):
                 os.rmdir(temp_dir)
-        except:
+        except Exception:
             pass
-

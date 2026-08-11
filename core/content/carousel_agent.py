@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 from core.clients.llm import get_llm_service, unload_ollama
 from core.clients.sd_client import resim_ciz
@@ -9,23 +9,28 @@ from core.content.daily_visual_agent import dunya_gundemini_getir
 CAROUSEL_COUNT = 10
 
 # Quality anchor for carousel prompts. Do not force camera/color sameness here.
-CAROUSEL_QUALITY_ANCHOR = (
-    "ultra-detailed photoreal image, clean rendering, cinematic clarity, natural material realism"
-)
+CAROUSEL_QUALITY_ANCHOR = "ultra-detailed photoreal image, clean rendering, cinematic clarity, natural material realism"
 
 # Shared composition anchor: keeps subject identity consistent while allowing style variation.
-CAROUSEL_COMPOSITION_ANCHOR = (
-    "same exact subject identity, coherent visual continuity, no redesign"
-)
+CAROUSEL_COMPOSITION_ANCHOR = "same exact subject identity, coherent visual continuity, no redesign"
 
 # Data-driven subject profiles.
 # New domains should be added here instead of writing new if/else branches.
-SUBJECT_PROFILES: List[Dict[str, Any]] = [
+SUBJECT_PROFILES: list[dict[str, Any]] = [
     {
         "id": "marine_animal",
         "keywords": [
-            "sea turtle", "turtle", "ocean", "marine", "coast", "plastic", "pollution",
-            "fish", "whale", "reef", "shore",
+            "sea turtle",
+            "turtle",
+            "ocean",
+            "marine",
+            "coast",
+            "plastic",
+            "pollution",
+            "fish",
+            "whale",
+            "reef",
+            "shore",
         ],
         "environment_anchor": "marine shoreline or ocean environment, visible pollution cues such as floating plastic debris",
         "subject_lock": "same species, same body proportions, same defining physical traits",
@@ -56,12 +61,12 @@ SUBJECT_PROFILES: List[Dict[str, Any]] = [
     },
 ]
 
-DEFAULT_SUBJECT_PROFILE: Dict[str, str] = {
+DEFAULT_SUBJECT_PROFILE: dict[str, str] = {
     "environment_anchor": "environment directly relevant to the topic and the subject",
     "subject_lock": "same defining identity traits and consistent recognizable form",
 }
 
-STYLE_PRESETS: List[Dict[str, str]] = [
+STYLE_PRESETS: list[dict[str, str]] = [
     {
         "name": "Documentary",
         "signature": "documentary realism, natural daylight, true-to-life textures, candid field photography",
@@ -143,13 +148,13 @@ CAROUSEL_NEGATIVE_PROMPT = (
 
 
 def _clean_text(value: Any, max_len: int = 220) -> str:
-    text = str(value or "").replace("\n", " ").strip().strip('"\'')
+    text = str(value or "").replace("\n", " ").strip().strip("\"'")
     if len(text) > max_len:
         text = text[:max_len].rstrip()
     return text
 
 
-def _fallback_topic(news: List[str]) -> str:
+def _fallback_topic(news: list[str]) -> str:
     if news:
         base = _clean_text(news[0], max_len=120)
         return f"Visual story inspired by: {base}"
@@ -201,9 +206,9 @@ def _build_slides_prompt(topic: str, subject_anchor: str, narrative_curve: str) 
     )
 
 
-def _resolve_subject_profile(topic: str, subject_anchor: str) -> Dict[str, str]:
+def _resolve_subject_profile(topic: str, subject_anchor: str) -> dict[str, str]:
     text = f"{topic} {subject_anchor}".lower()
-    best_profile: Dict[str, Any] | None = None
+    best_profile: dict[str, Any] | None = None
     best_score = 0
 
     for profile in SUBJECT_PROFILES:
@@ -254,7 +259,7 @@ def _compose_slide_prompt(
     )
 
 
-def _fallback_slide(topic: str, subject_anchor: str, idx: int) -> Dict[str, str]:
+def _fallback_slide(topic: str, subject_anchor: str, idx: int) -> dict[str, str]:
     stage = idx + 1
     style_name = STYLE_PRESETS[idx]["name"]
     prompt = _compose_slide_prompt(
@@ -266,21 +271,21 @@ def _fallback_slide(topic: str, subject_anchor: str, idx: int) -> Dict[str, str]
 
 
 def _normalize_slides(
-    raw_slides: List[Any],
+    raw_slides: list[Any],
     *,
     topic: str,
     subject_anchor: str,
-) -> List[Dict[str, str]]:
-    normalized: List[Dict[str, str]] = []
+) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
 
     for i in range(CAROUSEL_COUNT):
         style_name = STYLE_PRESETS[i]["name"]
         item = raw_slides[i] if i < len(raw_slides) else {}
 
         if isinstance(item, dict):
-            title = _clean_text(item.get("title") or f"{i+1}. {style_name}", max_len=48)
+            title = _clean_text(item.get("title") or f"{i + 1}. {style_name}", max_len=48)
         else:
-            title = f"{i+1}. {style_name}"
+            title = f"{i + 1}. {style_name}"
 
         prompt = _compose_slide_prompt(
             idx=i,
@@ -289,7 +294,7 @@ def _normalize_slides(
             llm_hint="",
         )
 
-        normalized.append({"title": title or f"{i+1}. {style_name}", "prompt": prompt})
+        normalized.append({"title": title or f"{i + 1}. {style_name}", "prompt": prompt})
 
     return normalized
 
@@ -378,7 +383,7 @@ def generate_carousel_content(log_callback=print):
     )
     if not caption:
         caption = format_caption_hashtags_bottom(
-            f"Ayni konu, 10 farkli tarz. Sence en iyi slide hangisi?",
+            "Ayni konu, 10 farkli tarz. Sence en iyi slide hangisi?",
             "#ai #carousel #digitalart #visualstory #stablediffusion",
         )
 
