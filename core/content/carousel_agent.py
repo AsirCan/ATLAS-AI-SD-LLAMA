@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Any
 
@@ -5,6 +6,9 @@ from core.clients.llm import get_llm_service, unload_ollama
 from core.clients.sd_client import resim_ciz
 from core.content.caption_format import format_caption_hashtags_bottom
 from core.content.daily_visual_agent import dunya_gundemini_getir
+from core.errors import LLMResponseError
+
+logger = logging.getLogger(__name__)
 
 CAROUSEL_COUNT = 10
 
@@ -316,7 +320,8 @@ def generate_carousel_content(log_callback=print):
     if not isinstance(raw_news, list):
         try:
             raw_news = list(raw_news)
-        except Exception:
+        except TypeError:
+            logger.warning("Carousel news payload is not iterable", exc_info=True)
             return False, None, f"Veri hatasi: {type(raw_news)}"
 
     news_slice = [f"- {_clean_text(x, max_len=220)}" for x in raw_news[:50] if _clean_text(x)]
@@ -333,8 +338,9 @@ def generate_carousel_content(log_callback=print):
 
     try:
         plan = llm.generate_response(_build_plan_prompt(news_lines), schema=plan_schema)
-    except Exception as e:
-        log_callback(f"Plan uretimi fallback: {e}")
+    except LLMResponseError as exc:
+        logger.warning("Carousel plan response was invalid; using fallback", exc_info=True)
+        log_callback(f"Plan uretimi fallback: {exc}")
         plan = {}
 
     topic = _clean_text(plan.get("topic") or _fallback_topic(raw_news), max_len=140)
@@ -366,8 +372,9 @@ def generate_carousel_content(log_callback=print):
             _build_slides_prompt(topic, subject_anchor, narrative_curve),
             schema=slides_schema,
         )
-    except Exception as e:
-        log_callback(f"Prompt uretimi fallback: {e}")
+    except LLMResponseError as exc:
+        logger.warning("Carousel slide response was invalid; using fallback", exc_info=True)
+        log_callback(f"Prompt uretimi fallback: {exc}")
         slide_data = {}
 
     raw_slides = slide_data.get("slides", []) if isinstance(slide_data, dict) else []

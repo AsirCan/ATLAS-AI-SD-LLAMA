@@ -12,6 +12,7 @@ import pytest
 
 from core.agents import news_agent as na_module
 from core.agents.news_agent import NewsAgent, _find_keyword_hit
+from core.errors import LLMUnavailableError
 from core.pipeline.state import PipelineState
 
 
@@ -25,7 +26,8 @@ def feed(monkeypatch):
 
     def _set(entries):
         monkeypatch.setattr(
-            na_module.feedparser, "parse",
+            na_module.feedparser,
+            "parse",
             lambda *_a, **_k: types.SimpleNamespace(entries=entries),
         )
 
@@ -67,9 +69,7 @@ class TestHaberCekme:
         assert titles == ["Yeni park acildi"]
 
     def test_kullanilmis_haber_tekrar_alinmaz(self, feed, fake_llm, monkeypatch):
-        monkeypatch.setattr(
-            na_module, "get_used_title_set", lambda *_a, **_k: {"zaten paylasildi"}
-        )
+        monkeypatch.setattr(na_module, "get_used_title_set", lambda *_a, **_k: {"zaten paylasildi"})
         feed([entry("Zaten paylasildi"), entry("Taze haber")])
         agent = NewsAgent(fake_llm(responses=[]), rss_urls=["http://ornek/rss"])
 
@@ -90,9 +90,7 @@ class TestHaberCekme:
             return types.SimpleNamespace(entries=[entry("Calisan kaynak haberi")])
 
         monkeypatch.setattr(na_module.feedparser, "parse", parse)
-        agent = NewsAgent(
-            fake_llm(responses=[]), rss_urls=["http://bozuk/rss", "http://saglam/rss"]
-        )
+        agent = NewsAgent(fake_llm(responses=[]), rss_urls=["http://bozuk/rss", "http://saglam/rss"])
 
         titles = [i["title"] for i in agent._fetch_news()]
 
@@ -124,9 +122,7 @@ class TestSkorlama:
         )
         agent = NewsAgent(llm, rss_urls=[])
 
-        scored = agent._score_news(
-            [{"title": "Viral", "summary": ""}, {"title": "Duygusal", "summary": ""}]
-        )
+        scored = agent._score_news([{"title": "Viral", "summary": ""}, {"title": "Duygusal", "summary": ""}])
 
         assert scored[0]["final_score"] > scored[1]["final_score"]
 
@@ -141,17 +137,22 @@ class TestSkorlama:
     def test_skorlama_hatasi_haberi_atlar(self, fake_llm):
         llm = fake_llm(
             responses=[
-                RuntimeError("LLM patladi"),
+                ValueError("LLM cevabi bozuk"),
                 {"emotional_score": 5, "viral_potential": 5, "reason": ""},
             ]
         )
         agent = NewsAgent(llm, rss_urls=[])
 
-        scored = agent._score_news(
-            [{"title": "Bozuk", "summary": ""}, {"title": "Saglam", "summary": ""}]
-        )
+        scored = agent._score_news([{"title": "Bozuk", "summary": ""}, {"title": "Saglam", "summary": ""}])
 
         assert [i["title"] for i in scored] == ["Saglam"]
+
+    def test_ollama_baglanti_hatasi_yutulmaz(self, fake_llm):
+        llm = fake_llm(responses=[LLMUnavailableError("connection refused")])
+        agent = NewsAgent(llm, rss_urls=[])
+
+        with pytest.raises(LLMUnavailableError):
+            agent._score_news([{"title": "T", "summary": "S"}])
 
     def test_orijinal_alanlar_korunur(self, fake_llm):
         llm = fake_llm(responses=[{"emotional_score": 5, "viral_potential": 5, "reason": "iyi"}])
@@ -180,9 +181,7 @@ class TestExecute:
 
     def test_en_fazla_on_haber(self, feed, fake_llm):
         feed([entry(f"H{i}") for i in range(5)])
-        llm = fake_llm(
-            responses=[{"emotional_score": 5, "viral_potential": 5, "reason": ""}] * 5
-        )
+        llm = fake_llm(responses=[{"emotional_score": 5, "viral_potential": 5, "reason": ""}] * 10)
         agent = NewsAgent(llm, rss_urls=["http://a/rss", "http://b/rss"])
 
         state = agent._execute(PipelineState())

@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from pathlib import Path
@@ -5,20 +6,22 @@ from urllib.parse import urlparse
 
 import requests
 from instagrapi import Client
-from instagrapi.exceptions import ChallengeRequired, LoginRequired, TwoFactorRequired
+from instagrapi.exceptions import ChallengeRequired, TwoFactorRequired
 
 from core.clients.llm import llm_answer
 from core.content.caption_format import format_caption_hashtags_bottom
 from core.runtime.config import GREEN, INSTA_SESSIONID, INSTA_USERNAME, RED, RESET, YELLOW
 
+logger = logging.getLogger(__name__)
+
 try:
     import keyring
-except Exception:
+except ImportError:
     keyring = None
 
 try:
     from dotenv import dotenv_values
-except Exception:
+except ImportError:
     dotenv_values = None
 
 SESSION_FILE = "insta_session.json"
@@ -30,17 +33,20 @@ IMGBB_API_KEY = os.getenv("IMGBB_API_KEY", "").strip()
 class GraphAPIError(RuntimeError):
     def __init__(self, body: dict):
         self.body = body if isinstance(body, dict) else {"raw": str(body)}
-        err = self.body.get("error", {}) if isinstance(self.body, dict) else {}
-        msg = err.get("message") or str(self.body)
-        super().__init__(f"Graph API error: {msg}")
+        raw_error = self.body.get("error")
+        error = raw_error if isinstance(raw_error, dict) else {}
+        message = error.get("message") or str(raw_error or self.body)
+        super().__init__(f"Graph API error: {message}")
 
     @property
     def code(self):
-        return (self.body.get("error") or {}).get("code")
+        error = self.body.get("error")
+        return error.get("code") if isinstance(error, dict) else None
 
     @property
     def subcode(self):
-        return (self.body.get("error") or {}).get("error_subcode")
+        error = self.body.get("error")
+        return error.get("error_subcode") if isinstance(error, dict) else None
 
 
 def _read_runtime_env() -> dict:
@@ -56,8 +62,8 @@ def _read_runtime_env() -> dict:
             for k, v in file_vals.items():
                 if v is not None:
                     values[k] = str(v)
-        except Exception:
-            pass
+        except (OSError, ValueError):
+            logger.warning("Could not read runtime environment file: %s", env_path, exc_info=True)
     return values
 
 
@@ -101,12 +107,14 @@ def get_instagram_credentials():
         try:
             username = keyring.get_password(KEYRING_SERVICE, KEYRING_ACTIVE_USER)
         except Exception:
+            logger.warning("Could not read active Instagram user from keyring", exc_info=True)
             username = None
 
     if username and keyring is not None:
         try:
             password = keyring.get_password(KEYRING_SERVICE, username)
         except Exception:
+            logger.warning("Could not read Instagram password from keyring", exc_info=True)
             password = None
 
     return username, password
@@ -212,11 +220,13 @@ def _ensure_graph_image_ready(image_path_or_url: str) -> str:
         from PIL import Image
 
         converted = src_path.with_name(f"{src_path.stem}_graph.jpg")
-        img = Image.open(src_path).convert("RGB")
-        img.save(converted, format="JPEG", quality=95)
+        with Image.open(src_path) as img:
+            img.convert("RGB").save(converted, format="JPEG", quality=95)
         return str(converted)
-    except Exception as e:
-        raise RuntimeError(f"Graph image conversion failed: {e}")
+    except ImportError as exc:
+        raise RuntimeError("Graph image conversion requires Pillow") from exc
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Graph image conversion failed: {exc}") from exc
 
 
 def _graph_post(endpoint: str, payload: dict) -> dict:
@@ -234,7 +244,8 @@ def _graph_post(endpoint: str, payload: dict) -> dict:
             r = requests.post(url, data=data, timeout=120)  # Increased timeout to 120s
             try:
                 body = r.json()
-            except Exception:
+            except (requests.RequestException, ValueError):
+                logger.warning("Graph API returned a non-JSON response", exc_info=True)
                 body = {"raw": r.text}
 
             if not r.ok or "error" in body:
@@ -243,15 +254,28 @@ def _graph_post(endpoint: str, payload: dict) -> dict:
                 raise GraphAPIError(body)
             return body
 
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            print(f"{YELLOW}⚠️ Graph API Timeout/Connection ({attempt + 1}/{max_retries}): {e}{RESET}")
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            logger.warning(
+                "Graph API connection attempt %s/%s failed",
+                attempt + 1,
+                max_retries,
+                exc_info=True,
+            )
             if attempt == max_retries - 1:
-                raise GraphAPIError({"error": {"message": f"Timeout after {max_retries} attempts", "details": str(e)}})
+                raise GraphAPIError(
+                    {
+                        "error": {
+                            "message": f"Timeout after {max_retries} attempts",
+                            "details": str(exc),
+                        }
+                    }
+                ) from exc
             time.sleep(3)
         except GraphAPIError:
             raise
-        except Exception as e:
-            raise GraphAPIError({"error": {"message": f"Unexpected error: {str(e)}"}})
+        except requests.RequestException as exc:
+            logger.exception("Graph API request failed")
+            raise GraphAPIError({"error": {"message": f"Request failed: {exc}"}}) from exc
 
     return {}  # Should not reach here
 
@@ -282,8 +306,8 @@ def _discover_ig_user_id() -> str:
             ig_id = str(ig_obj.get("id") or "").strip()
             if ig_id:
                 return ig_id
-        except Exception:
-            pass
+        except (requests.RequestException, AttributeError, TypeError, ValueError):
+            logger.warning("Could not discover Instagram user from configured Facebook page", exc_info=True)
 
     try:
         accounts_resp = requests.get(
@@ -300,8 +324,8 @@ def _discover_ig_user_id() -> str:
             ig_id = str(ig_obj.get("id") or "").strip()
             if ig_id:
                 return ig_id
-    except Exception:
-        pass
+    except (requests.RequestException, AttributeError, TypeError, ValueError):
+        logger.warning("Could not discover Instagram user from Facebook accounts", exc_info=True)
 
     return ""
 
@@ -313,7 +337,8 @@ def _is_invalid_object_id_error(e: Exception) -> bool:
 def _is_media_fetch_error(e: Exception) -> bool:
     if not isinstance(e, GraphAPIError):
         return False
-    err = (e.body.get("error") or {}) if isinstance(e.body, dict) else {}
+    raw_error = e.body.get("error") if isinstance(e.body, dict) else None
+    err = raw_error if isinstance(raw_error, dict) else {}
     code = err.get("code")
     sub = err.get("error_subcode")
     msg = str(err.get("message") or "").lower()
@@ -355,8 +380,8 @@ def _upload_temp_public_image(local_image_path: str) -> str:
                     return url
             else:
                 print(f"{YELLOW}⚠️ ImgBB Hata: {r.text}{RESET}")
-        except Exception as e:
-            print(f"{YELLOW}⚠️ ImgBB Exception: {e}{RESET}")
+        except (OSError, requests.RequestException, AttributeError, ValueError):
+            logger.warning("ImgBB temporary image upload failed", exc_info=True)
 
     # 1) 0x0.st (simple, no key)
     try:
@@ -374,9 +399,8 @@ def _upload_temp_public_image(local_image_path: str) -> str:
                 return url
         else:
             print(f"{YELLOW}⚠️ 0x0.st Hata Kod: {r.status_code}, Body: {r.text[:200]}{RESET}")
-    except Exception as e:
-        print(f"{YELLOW}⚠️ 0x0.st Exception: {e}{RESET}")
-        pass
+    except (OSError, requests.RequestException):
+        logger.warning("0x0.st temporary image upload failed", exc_info=True)
 
     # 2) catbox.moe fallback
     try:
@@ -395,9 +419,8 @@ def _upload_temp_public_image(local_image_path: str) -> str:
                 return url
         else:
             print(f"{YELLOW}⚠️ catbox.moe Hata Kod: {r.status_code}, Body: {r.text[:200]}{RESET}")
-    except Exception as e:
-        print(f"{YELLOW}⚠️ catbox.moe Exception: {e}{RESET}")
-        pass
+    except (OSError, requests.RequestException):
+        logger.warning("catbox.moe temporary image upload failed", exc_info=True)
 
     raise RuntimeError("Gorsel icin gecici public URL olusturulamadi (Tum servisler denendi).")
 
@@ -416,7 +439,7 @@ def _publish_single_with_graph(image_path_or_url: str, caption: str):
             f"{ig_user_id}/media",
             {"image_url": image_url, "caption": caption or ""},
         )
-    except Exception as e:
+    except GraphAPIError as e:
         if _is_invalid_object_id_error(e):
             discovered = _discover_ig_user_id()
             if discovered and discovered != ig_user_id:
@@ -559,8 +582,8 @@ def login_to_instagram():
             cl.dump_settings(SESSION_FILE)
             print(f"{GREEN}SessionID ile giriş başarılı.{RESET}")
             return cl
-        except Exception as e:
-            print(f"{YELLOW}SessionID ile giriş başarısız: {e}{RESET}")
+        except Exception:
+            logger.warning("Instagram SessionID login failed", exc_info=True)
 
     username, password = get_instagram_credentials()
     if not username or not password:
@@ -576,12 +599,12 @@ def login_to_instagram():
             cl.login(username, password)
             print(f"{GREEN}✅ Eski oturum ile giriş başarılı.{RESET}")
             return cl
-        except (LoginRequired, Exception) as e:
-            print(f"{RED}⚠️ Oturum geçersiz (Hata: {e}), dosya siliniyor...{RESET}")
+        except Exception:
+            logger.warning("Saved Instagram session is invalid; removing it", exc_info=True)
             try:
                 os.remove(SESSION_FILE)
-            except Exception:
-                pass
+            except OSError:
+                logger.warning("Could not remove invalid Instagram session file", exc_info=True)
             print(f"{YELLOW}🔄 Sıfırdan giriş moduna geçiliyor...{RESET}")
 
     # 2. Sıfırdan Giriş
@@ -604,8 +627,8 @@ def login_to_instagram():
         code = input(f"{YELLOW}👉 SMS/Mail kodunu gir: {RESET}")
         cl.challenge_resolve(cl.last_json, code)
 
-    except Exception as e:
-        print(f"{RED}❌ Giriş hatası: {e}{RESET}")
+    except Exception:
+        logger.exception("Instagram password login failed")
         return None
 
     # Başarılı olursa kaydet
@@ -620,7 +643,8 @@ def reset_instagram_session() -> bool:
         if os.path.exists(SESSION_FILE):
             os.remove(SESSION_FILE)
         return True
-    except Exception:
+    except OSError:
+        logger.exception("Could not reset Instagram session")
         return False
 
 
@@ -687,13 +711,11 @@ def login_and_upload(image_path, caption):
         print(f"{GREEN}{success_msg} PK: {media.pk}{RESET}")
         return True, success_msg
 
-    except Exception as e:
-        error_msg = f"Instagram yükleme hatası: {e}"
-        print(f"{RED}{error_msg}{RESET}")
+    except Exception as exc:
+        logger.exception("Instagram upload failed")
+        error_msg = f"Instagram yükleme hatası: {exc}"
         return False, error_msg
 
-
-import traceback
 
 from PIL import Image
 
@@ -717,9 +739,9 @@ def login_and_upload_album(image_paths, caption):
             success_msg = f"Album Graph API ile yuklendi. ID: {media_id}"
             print(f"{GREEN}{success_msg}{RESET}")
             return True, success_msg
-        except Exception as e:
-            error_msg = f"Graph API album yukleme hatasi: {e}"
-            print(f"{RED}{error_msg}{RESET}")
+        except Exception as exc:
+            logger.exception("Graph API album upload failed")
+            error_msg = f"Graph API album yukleme hatasi: {exc}"
             return False, error_msg
 
     # Graph API kurulu degil. Legacy yola sessizce dusme.
@@ -755,8 +777,8 @@ def login_and_upload_album(image_paths, caption):
                     rgb_im.save(save_path, quality=95)
                     ready_paths.append(save_path)
                     converted_files.append(save_path)
-                except Exception as e:
-                    print(f"{RED}⚠️ Resim dönüştürme hatası ({p}): {e}{RESET}")
+                except (OSError, ValueError):
+                    logger.warning("Instagram album image conversion failed: %s", p, exc_info=True)
 
         if len(ready_paths) == 0:
             return False, "Hata: Hiçbir resim işlenemedi."
@@ -778,12 +800,9 @@ def login_and_upload_album(image_paths, caption):
 
         return True, success_msg
 
-    except Exception as e:
-        # Detaylı Hata Loglama
-        err_msg = str(e)
-        trace = traceback.format_exc()
-        print(f"{RED}❌ Instagram Albüm yükleme hatası detaylı: {err_msg}{RESET}")
-        print(f"{RED}{trace}{RESET}")
+    except Exception as exc:
+        logger.exception("Instagram album upload failed")
+        err_msg = str(exc)
 
         if "Unknown" in err_msg:
             return False, "Bilinmeyen hata (Format sorunu olabilir). Loglara bakınız."
@@ -796,11 +815,11 @@ def login_and_upload_album(image_paths, caption):
             try:
                 if os.path.exists(f):
                     os.remove(f)
-            except Exception:
-                pass
+            except OSError:
+                logger.warning("Could not remove temporary Instagram image: %s", f, exc_info=True)
         # Temp klasörü boşsa sil
         try:
             if os.path.exists(temp_dir) and not os.listdir(temp_dir):
                 os.rmdir(temp_dir)
-        except Exception:
-            pass
+        except OSError:
+            logger.warning("Could not remove temporary Instagram directory: %s", temp_dir, exc_info=True)

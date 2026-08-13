@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 import threading
 import time
@@ -7,7 +8,9 @@ from typing import Any, Literal
 
 import requests
 
-from core.runtime.config import RED, RESET, YELLOW
+from core.errors import CancelledError, LLMResponseError, LLMUnavailableError
+
+logger = logging.getLogger(__name__)
 
 # ==================================================
 # Ollama Settings
@@ -38,7 +41,7 @@ def get_llm_service():
     return _DEFAULT_LLM_SERVICE
 
 
-def llm_answer(msg: str, system_msg: str = None) -> str:
+def llm_answer(msg: str, system_msg: str | None = None) -> str:
     # 3 kere deneme hakkı veriyoruz
     max_retries = 3
 
@@ -50,16 +53,16 @@ def llm_answer(msg: str, system_msg: str = None) -> str:
             # Timeout süresini artırdık çünkü modelin yüklenmesi uzun sürebilir
             return get_llm_service().ask(msg, system=final_system_prompt, timeout=180, retries=1)
 
-        except Exception as e:
-            print(RED + f"[OLLAMA HATASI - Deneme {i + 1}/{max_retries}] {e}")
-            if "Cancelled during LLM request" in str(e):
-                return "İstek iptal edildi."
-            if "500" in str(e) or "Connection refused" in str(e):
-                print(f"{YELLOW}⏳ VRAM'in boşalması bekleniyor (5 sn)...{RESET}")
-                time.sleep(5)  # 5 saniye bekle ve tekrar dene
-            else:
-                # Başka bir hataysa (örn: internet yok) bekleme, direkt çık
-                break
+        except CancelledError:
+            return "İstek iptal edildi."
+        except LLMUnavailableError:
+            logger.exception("Ollama request failed (attempt %s/%s)", i + 1, max_retries)
+            if i < max_retries - 1:
+                logger.info("VRAM release is being given 5 seconds before retry")
+                time.sleep(5)
+        except LLMResponseError:
+            logger.exception("Ollama returned an unusable response")
+            break
 
     return "Şu an cevap veremiyorum (Teknik arıza)."
 
@@ -70,7 +73,7 @@ def ollama_warmup():
     Offline modda 500 hatasını önler.
     """
     try:
-        print("🧠 Ollama modeli ısıtılıyor (warm-up)...")
+        logger.info("Ollama model warm-up is starting")
         subprocess.Popen(
             ["ollama", "run", MODEL],
             stdin=subprocess.PIPE,
@@ -78,9 +81,9 @@ def ollama_warmup():
             stderr=subprocess.DEVNULL,
         )
         time.sleep(2.5)
-        print("✅ Ollama warm-up tamamlandı.")
-    except Exception as e:
-        print(f"⚠️ Ollama warm-up başarısız: {e}")
+        logger.info("Ollama model warm-up completed")
+    except OSError:
+        logger.exception("Ollama warm-up could not be started")
 
 
 # llm.py dosyasının en altına ekle:
@@ -91,11 +94,12 @@ def unload_ollama():
     Ollama modelini VRAM'den zorla boşaltır.
     Böylece Stable Diffusion için yer açılır.
     """
-    try:
-        get_llm_service().unload(timeout=3)
-        print(f"{RED}🧹 Ollama VRAM'den temizlendi.{RESET}")
-    except Exception as e:
-        print(f"⚠️ VRAM temizleme hatası: {e}")
+    unloaded = get_llm_service().unload(timeout=3)
+    if unloaded:
+        logger.info("Ollama model unloaded from memory")
+    else:
+        logger.warning("Ollama model could not be unloaded from memory")
+    return unloaded
 
 
 def visual_prompt_generator(user_text: str) -> str:
@@ -124,10 +128,8 @@ def visual_prompt_generator(user_text: str) -> str:
 
         return prompt_en
 
-    except Exception as e:
-        print(f"Prompt Generation Error: {e}")
-        # Hata olursa en azından orijinalini (veya basit çeviriyi) döndürmeye çalışalım
-        # ama LLM yoksa yapacak bir şey yok, orijinali yolla.
+    except (LLMUnavailableError, LLMResponseError):
+        logger.exception("Visual prompt generation failed; using the original prompt")
         return user_text
 
 
@@ -138,7 +140,7 @@ MessageRole = Literal["system", "user", "assistant"]
 
 
 class LLMService:
-    def __init__(self, model: str = None, host: str = "http://localhost:11434"):
+    def __init__(self, model: str | None = None, host: str = "http://localhost:11434"):
         # Use existing MODEL constant if none provided
         self.model = model or MODEL
         self.host = host
@@ -149,10 +151,7 @@ class LLMService:
         self.cancel_checker = checker
 
     def _is_cancelled(self) -> bool:
-        try:
-            return bool(self.cancel_checker and self.cancel_checker())
-        except Exception:
-            return False
+        return bool(self.cancel_checker and self.cancel_checker())
 
     def _post_with_cancel(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -163,8 +162,8 @@ class LLMService:
                 response = requests.post(self.api_url, json=payload, timeout=timeout)
                 response.raise_for_status()
                 result["json"] = response.json()
-            except Exception as e:
-                result["error"] = e
+            except Exception as exc:  # Thread boundary: re-raised on the caller thread.
+                result["error"] = exc
             finally:
                 done.set()
 
@@ -173,7 +172,7 @@ class LLMService:
 
         while not done.wait(0.2):
             if self._is_cancelled():
-                raise Exception("Cancelled during LLM request")
+                raise CancelledError("Cancelled during LLM request")
 
         if "error" in result:
             raise result["error"]
@@ -191,19 +190,52 @@ class LLMService:
         if format:
             payload["format"] = format
 
-        last_exc: Exception | None = None
-        for _ in range(retries):
+        last_exc: requests.RequestException | None = None
+        for attempt in range(retries):
             if self._is_cancelled():
-                raise Exception("Cancelled during LLM request")
+                raise CancelledError("Cancelled during LLM request")
             try:
                 result = self._post_with_cancel(payload, timeout=timeout)
-                return result.get("message", {}).get("content", "")
-            except Exception as e:
-                if "Cancelled during LLM request" in str(e):
-                    raise
-                last_exc = e
+                content = result.get("message", {}).get("content", "")
+                if not isinstance(content, str):
+                    raise LLMResponseError("Ollama response content is not text")
+                return content
+            except CancelledError:
+                raise
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                last_exc = exc
+                logger.warning(
+                    "Ollama connection attempt %s/%s failed",
+                    attempt + 1,
+                    retries,
+                    exc_info=True,
+                )
+            except requests.HTTPError as exc:
+                status = getattr(exc.response, "status_code", None)
+                if status is not None and status < 500:
+                    raise LLMResponseError(f"Ollama HTTP {status}") from exc
+                last_exc = exc
+                logger.warning(
+                    "Ollama HTTP request attempt %s/%s failed",
+                    attempt + 1,
+                    retries,
+                    exc_info=True,
+                )
+            except requests.RequestException as exc:
+                last_exc = exc
+                logger.warning(
+                    "Ollama request attempt %s/%s failed",
+                    attempt + 1,
+                    retries,
+                    exc_info=True,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise LLMResponseError(str(exc)) from exc
+
+            if attempt < retries - 1:
                 time.sleep(2)
-        raise Exception(f"Failed to chat with LLM after {retries} retries: {last_exc}")
+
+        raise LLMUnavailableError(str(last_exc)) from last_exc
 
     def ask(
         self,
@@ -240,26 +272,33 @@ class LLMService:
         schema_hint = json.dumps(schema, ensure_ascii=False)
         final_prompt = f"{prompt}\n\nIMPORTANT: Return ONLY a valid JSON object matching this schema: {schema_hint}"
 
-        last_exc: Exception | None = None
+        last_exc: json.JSONDecodeError | None = None
         for attempt in range(retries):
             if self._is_cancelled():
-                raise Exception("Cancelled during LLM request")
+                raise CancelledError("Cancelled during LLM request")
+            response_text = self.ask(
+                final_prompt,
+                system=system,
+                timeout=timeout,
+                retries=1,
+                format="json",
+            )
             try:
-                response_text = self.ask(
-                    final_prompt,
-                    system=system,
-                    timeout=timeout,
-                    retries=1,
-                    format="json",
+                result = json.loads(_clean_llm_text(response_text))
+                if not isinstance(result, dict):
+                    raise LLMResponseError("Ollama JSON response is not an object")
+                return result
+            except json.JSONDecodeError as exc:
+                last_exc = exc
+                logger.warning(
+                    "Ollama JSON parse attempt %s/%s failed",
+                    attempt + 1,
+                    retries,
+                    exc_info=True,
                 )
-                return json.loads(_clean_llm_text(response_text))
-            except Exception as e:
-                if "Cancelled during LLM request" in str(e):
-                    raise
-                last_exc = e
-                print(f"LLM JSON parse error (Attempt {attempt + 1}/{retries}): {e}")
-                time.sleep(1)
-        raise Exception(f"Failed to generate valid JSON from LLM after {retries} retries: {last_exc}")
+                if attempt < retries - 1:
+                    time.sleep(1)
+        raise LLMResponseError(f"Valid JSON was not produced after {retries} attempts") from last_exc
 
     def unload(self, *, timeout: int = 3) -> bool:
         endpoints = [f"{self.host}/api/generate", f"{self.host}/api/chat"]
@@ -274,9 +313,11 @@ class LLMService:
                         "messages": [{"role": "user", "content": " "}],
                         "stream": False,
                     }
-                requests.post(url, json=payload, timeout=timeout)
+                response = requests.post(url, json=payload, timeout=timeout)
+                response.raise_for_status()
                 return True
-            except Exception:
+            except requests.RequestException:
+                logger.warning("Ollama unload endpoint failed: %s", url, exc_info=True)
                 continue
         return False
 

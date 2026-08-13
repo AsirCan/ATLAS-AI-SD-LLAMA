@@ -10,6 +10,7 @@ from datetime import datetime
 import pytest
 
 from core.agents.base import CancelledError
+from core.errors import LLMUnavailableError
 from core.pipeline import orchestrator as orch_module
 from core.pipeline.orchestrator import Orchestrator
 
@@ -110,7 +111,8 @@ class TestGuardlar:
         state = o.run_pipeline()
 
         assert upload_spy == []
-        assert state.upload_status == {}
+        assert state.upload_status["success"] is False
+        assert state.errors[0]["code"] == "schedule_output_missing"
 
 
 class TestMutluYol:
@@ -139,7 +141,8 @@ class TestMutluYol:
     def test_basarili_gorselden_sonra_haber_kullanildi_isaretlenir(self, monkeypatch):
         marked = []
         monkeypatch.setattr(
-            orch_module, "mark_used_titles",
+            orch_module,
+            "mark_used_titles",
             lambda titles, source=None: marked.append((list(titles), source)),
         )
 
@@ -180,7 +183,7 @@ class TestIptal:
 
         assert state.upload_status == {"success": False, "message": "Cancelled"}
 
-    def test_iptal_checker_bozuksa_pipeline_devam_eder(self, upload_spy):
+    def test_iptal_checker_bozuksa_pipeline_hata_olur(self, upload_spy):
         def broken():
             raise RuntimeError("checker bozuk")
 
@@ -189,7 +192,8 @@ class TestIptal:
 
         state = o.run_pipeline()
 
-        assert state.upload_status["success"] is True
+        assert state.upload_status["success"] is False
+        assert state.errors[0]["code"] == "pipeline_failed"
 
 
 class TestLoglama:
@@ -210,12 +214,23 @@ class TestLoglama:
 
         o.run_pipeline()
 
-        assert any("GUARD FAILURE" in line for line in logs)
+        assert any("PIPELINE FAILURE" in line for line in logs)
+
+
+def test_ollama_hatasi_guard_mesajina_donusmez():
+    o = build(news_agent=StubAgent(raises=LLMUnavailableError("connection refused")))
+
+    state = o.run_pipeline()
+
+    assert state.upload_status["message"] == "Ollama bağlantısı kurulamadı."
+    assert state.errors[0]["code"] == "ollama_unavailable"
+    assert "Haber kaynağından" not in state.upload_status["message"]
 
 
 def test_upload_hatasi_state_e_yansir(monkeypatch):
     monkeypatch.setattr(
-        orch_module, "login_and_upload",
+        orch_module,
+        "login_and_upload",
         lambda image, caption: (False, "Graph token gecersiz"),
     )
 
@@ -232,3 +247,5 @@ def test_state_ozeti_serilestirilebilir():
     assert summary["safe_news_count"] == 1
     assert summary["generated_images_count"] == 1
     assert summary["final_caption_preview"] == "Bir caption"
+    assert summary["errors"] == []
+    assert summary["has_fatal_errors"] is False

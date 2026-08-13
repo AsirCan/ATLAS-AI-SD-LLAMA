@@ -1,8 +1,11 @@
+import logging
 import socket
 import subprocess
 import time
 
 from core.runtime.config import GREEN, RESET, YELLOW
+
+logger = logging.getLogger(__name__)
 
 # ==================================================
 # Internet / SD (Forge) kontrol yardımcıları
@@ -38,25 +41,32 @@ def is_ollama_running(host="127.0.0.1", port=11434) -> bool:
 
 def start_ollama():
     """Ollama'yı başlatır."""
-    print("🦙 Ollama başlatılıyor...")
+    logger.info("Starting Ollama")
     subprocess.Popen(["ollama", "serve"], creationflags=subprocess.CREATE_NEW_CONSOLE)
 
 
-def ensure_ollama_running(log_callback=print, cancel_checker=None):
+def ensure_ollama_running(log_callback=print, cancel_checker=None, max_wait_seconds=60):
     if is_ollama_running():
         log_callback("🦙 Ollama zaten çalışıyor.")
         return True
 
-    start_ollama()
-    log_callback("⏳ Ollama açılıyor...")
+    try:
+        start_ollama()
+    except OSError:
+        logger.exception("Ollama process could not be started")
+        log_callback("❌ Ollama başlatılamadı.")
+        return False
+
+    log_callback(f"⏳ Ollama açılıyor... (en fazla {max_wait_seconds}s beklenecek)")
+    start_time = time.monotonic()
     while not is_ollama_running():
-        # Optional cooperative cancel (used by UI cancel)
-        try:
-            if callable(cancel_checker) and cancel_checker():
-                log_callback("🛑 İptal istendi (Ollama bekleme durduruldu).")
-                return False
-        except Exception:
-            pass
+        if callable(cancel_checker) and cancel_checker():
+            log_callback("🛑 İptal istendi (Ollama bekleme durduruldu).")
+            return False
+        if time.monotonic() - start_time >= max_wait_seconds:
+            logger.error("Ollama did not become ready within %s seconds", max_wait_seconds)
+            log_callback(f"❌ Ollama {max_wait_seconds}s içinde hazır olmadı.")
+            return False
         time.sleep(2)
     log_callback(f"{GREEN}✅ Ollama hazır!{RESET}")
     return True
@@ -99,13 +109,9 @@ def ensure_sd_running(wait_seconds=20, log_callback=print, cancel_checker=None, 
     last_print_time = start_time
 
     while True:
-        # Optional cooperative cancel (used by UI cancel)
-        try:
-            if callable(cancel_checker) and cancel_checker():
-                log_callback("🛑 İptal istendi (SD bekleme durduruldu).")
-                return False
-        except Exception:
-            pass
+        if callable(cancel_checker) and cancel_checker():
+            log_callback("🛑 İptal istendi (SD bekleme durduruldu).")
+            return False
 
         if is_sd_running():
             log_callback(f"{GREEN}✅ Stable Diffusion başarıyla bağlandı ve hazır!{RESET}")

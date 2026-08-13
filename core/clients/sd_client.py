@@ -1,4 +1,6 @@
 import base64
+import binascii
+import logging
 import os
 import threading
 import time
@@ -8,6 +10,7 @@ from typing import Any
 
 import requests
 
+from core.errors import CancelledError
 from core.runtime.config import (
     GREEN,
     RED,
@@ -40,6 +43,8 @@ from core.runtime.config import (
     SD_WIDTH,
     YELLOW,
 )
+
+logger = logging.getLogger(__name__)
 
 # ==================================================
 # Forge (Stable Diffusion) API
@@ -118,8 +123,8 @@ def save_image_base64(img_base64):
             num = int(f.split("_")[1].split(".")[0])
             if num > max_num:
                 max_num = num
-        except Exception:
-            pass
+        except (IndexError, ValueError):
+            logger.warning("Ignoring malformed generated image filename: %s", f, exc_info=True)
 
     file_number = max_num + 1
     filename = f"atlas_{file_number:03d}.png"
@@ -157,7 +162,8 @@ def _safe_get_json(endpoint: str, timeout: int = 3) -> Any | None:
         if not r.ok:
             return None
         return r.json()
-    except Exception:
+    except (requests.RequestException, ValueError):
+        logger.warning("Stable Diffusion capability request failed: %s", endpoint, exc_info=True)
         return None
 
 
@@ -337,7 +343,8 @@ def _read_image_b64(image_path: str) -> str | None:
     try:
         with open(image_path, "rb") as f:
             return base64.b64encode(f.read()).decode("utf-8")
-    except Exception:
+    except OSError:
+        logger.warning("ControlNet image could not be read: %s", image_path, exc_info=True)
         return None
 
 
@@ -400,7 +407,7 @@ def _upscale_image_base64(img_base64: str, *, cancel_checker: Callable[[], bool]
         return img_base64
 
     if _is_cancelled(cancel_checker):
-        return img_base64
+        raise CancelledError("Cancelled during SD post-upscale")
 
     upscaler = _pick_post_upscaler()
     payload = {
@@ -423,23 +430,20 @@ def _upscale_image_base64(img_base64: str, *, cancel_checker: Callable[[], bool]
         maybe_image = result.get("image") if isinstance(result, dict) else None
         if isinstance(maybe_image, str) and maybe_image.strip():
             return maybe_image
-    except Exception as e:
-        print(f"{YELLOW}Post-upscale skipped: {e}{RESET}")
+    except (requests.RequestException, ValueError):
+        logger.warning("Stable Diffusion post-upscale failed; using original image", exc_info=True)
     return img_base64
 
 
 def _is_cancelled(cancel_checker: Callable[[], bool] | None) -> bool:
-    try:
-        return bool(cancel_checker and cancel_checker())
-    except Exception:
-        return False
+    return bool(cancel_checker and cancel_checker())
 
 
 def _interrupt_sd_generation() -> None:
     try:
         requests.post(f"{URL}/sdapi/v1/interrupt", timeout=2)
-    except Exception:
-        pass
+    except requests.RequestException:
+        logger.warning("Stable Diffusion interrupt request failed", exc_info=True)
 
 
 def _post_with_cancel(
@@ -461,8 +465,9 @@ def _post_with_cancel(
             )
             response.raise_for_status()
             result["response"] = response
-        except Exception as e:
-            result["error"] = e
+        except Exception as exc:
+            logger.exception("Stable Diffusion request worker failed")
+            result["error"] = exc
         finally:
             done.set()
 
@@ -472,7 +477,7 @@ def _post_with_cancel(
     while not done.wait(0.2):
         if _is_cancelled(cancel_checker):
             _interrupt_sd_generation()
-            raise Exception("Cancelled during SD generation")
+            raise CancelledError("Cancelled during SD generation")
 
     if "error" in result:
         raise result["error"]
@@ -562,58 +567,64 @@ def resim_ciz(
     if alwayson_scripts:
         enhanced_payload["alwayson_scripts"] = alwayson_scripts
 
-    try:
-        print(f"{YELLOW}Starting generation...{RESET}")
-        start_time = time.time()
-        payloads_to_try: list[dict[str, Any]] = [enhanced_payload]
-        if enhanced_payload != base_payload:
-            payloads_to_try.append(base_payload)
+    print(f"{YELLOW}Starting generation...{RESET}")
+    start_time = time.time()
+    payloads_to_try: list[dict[str, Any]] = [enhanced_payload]
+    if enhanced_payload != base_payload:
+        payloads_to_try.append(base_payload)
 
-        last_error_text: str | None = None
-        for idx, payload in enumerate(payloads_to_try, start=1):
-            enhanced_try = idx == 1 and enhanced_payload != base_payload
-            try:
-                response = _post_with_cancel(
-                    endpoint=f"{URL}/sdapi/v1/txt2img",
-                    payload=payload,
-                    timeout=request_timeout,
-                    cancel_checker=cancel_checker,
+    last_error_text: str | None = None
+    for idx, payload in enumerate(payloads_to_try, start=1):
+        enhanced_try = idx == 1 and enhanced_payload != base_payload
+        try:
+            response = _post_with_cancel(
+                endpoint=f"{URL}/sdapi/v1/txt2img",
+                payload=payload,
+                timeout=request_timeout,
+                cancel_checker=cancel_checker,
+            )
+            result = response.json()
+        except CancelledError:
+            raise
+        except (requests.RequestException, ValueError) as exc:
+            last_error_text = str(exc)
+            if enhanced_try:
+                logger.warning(
+                    "Enhanced Stable Diffusion request failed; retrying base payload",
+                    exc_info=True,
                 )
-                result = response.json()
-            except Exception as e:
-                last_error_text = str(e)
-                if enhanced_try:
-                    print(f"{YELLOW}Enhanced pass failed, retrying base payload: {e}{RESET}")
-                    continue
-                raise
-
-            if "images" in result and len(result["images"]) > 0:
-                image_base64 = result["images"][0]
-                image_base64 = _upscale_image_base64(
-                    image_base64,
-                    cancel_checker=cancel_checker,
-                )
-                file_path = save_image_base64(image_base64)
-                elapsed = time.time() - start_time
-                print(f"{GREEN}Image saved: {file_path}{RESET}")
-                print(f"{YELLOW}Duration: {elapsed:.2f} sec{RESET}")
-                return True, file_path, prompt_en
-
-            err_text = result.get("error") if isinstance(result, dict) else None
-            if err_text:
-                last_error_text = str(err_text)
-                if enhanced_try:
-                    print(f"{YELLOW}Enhanced payload error, retrying base payload: {err_text}{RESET}")
-                    continue
-                print(f"{RED}SD returned error: {err_text}{RESET}")
-
-        if last_error_text:
-            print(f"{RED}Generation failed: {last_error_text}{RESET}")
-        return False, None, None
-
-    except Exception as e:
-        if "Cancelled during SD generation" in str(e):
-            print(f"{YELLOW}Generation cancelled by user.{RESET}")
+                continue
+            logger.exception("Stable Diffusion generation request failed")
             return False, None, None
-        print(f"{RED}Generation Error: {e}{RESET}")
-        return False, None, None
+
+        if not isinstance(result, dict):
+            logger.error("Stable Diffusion returned a non-object response: %s", type(result).__name__)
+            return False, None, None
+
+        images = result.get("images")
+        if isinstance(images, list) and images and isinstance(images[0], str):
+            image_base64 = _upscale_image_base64(
+                images[0],
+                cancel_checker=cancel_checker,
+            )
+            try:
+                file_path = save_image_base64(image_base64)
+            except (OSError, ValueError, binascii.Error):
+                logger.exception("Stable Diffusion image could not be saved")
+                return False, None, None
+            elapsed = time.time() - start_time
+            print(f"{GREEN}Image saved: {file_path}{RESET}")
+            print(f"{YELLOW}Duration: {elapsed:.2f} sec{RESET}")
+            return True, file_path, prompt_en
+
+        err_text = result.get("error")
+        if err_text:
+            last_error_text = str(err_text)
+            if enhanced_try:
+                logger.warning("Enhanced Stable Diffusion payload failed: %s", err_text)
+                continue
+            logger.error("Stable Diffusion returned an error: %s", err_text)
+
+    if last_error_text:
+        logger.error("Stable Diffusion generation failed: %s", last_error_text)
+    return False, None, None

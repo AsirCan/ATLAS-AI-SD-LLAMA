@@ -79,6 +79,7 @@ class TestJob:
 
         assert data["job_id"] == job.id
         assert data["kind"] == "video"
+        assert data["errors"] == []
         assert "logs" in data
 
 
@@ -167,6 +168,7 @@ class TestSnapshot:
         assert snap["status"] == "idle"
         assert snap["job_id"] is None
         assert snap["logs"] == []
+        assert snap["errors"] == []
 
     def test_bilinmeyen_job_id_idle_doner(self, registry):
         assert registry.snapshot("olmayan-kimlik")["status"] == "idle"

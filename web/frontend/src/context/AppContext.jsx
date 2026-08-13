@@ -41,6 +41,7 @@ export function AppProvider({ children }) {
     const [agentPercent, setAgentPercent] = useState(0);
     const [agentStage, setAgentStage] = useState('idle');
     const [agentStatus, setAgentStatus] = useState('idle');
+    const [agentError, setAgentError] = useState(null);
     const [agentCancelRequested, setAgentCancelRequested] = useState(false);
     // Backend her uzun ise bir kimlik veriyor; ilerleme ve iptal bu kimlikle
     // sorgulanir, boylece isler birbirinin durumunu ezmez.
@@ -87,7 +88,8 @@ export function AppProvider({ children }) {
     const isStudioFlow = [
         'idle', 'generating', 'review', 'uploading', 'done',
         'generating_carousel', 'done_carousel', 'uploaded_carousel',
-        'uploading_carousel', 'generating_agent',
+        'uploading_carousel', 'generating_agent', 'agent_done',
+        'agent_error', 'agent_cancelled',
     ].includes(studioStep);
     const isVideoFlow = studioStep === 'generating_video' || studioStep === 'done_video';
 
@@ -124,6 +126,7 @@ export function AppProvider({ children }) {
         setAgentPercent,
         setAgentStage,
         setAgentLogs,
+        setAgentError,
         setAgentCancelRequested,
         setStudioStep,
     });
@@ -426,6 +429,7 @@ export function AppProvider({ children }) {
         handleGenerateNews, handleInstaUpload,
         // Agent
         agentStatusText, agentLogs, agentPercent, agentStage, agentStatus,
+        agentError, setAgentError,
         agentCancelRequested, setAgentCancelRequested, isAgentRunning,
         agentJobId, setAgentJobId,
         setAgentStatus, setAgentStatusText, setAgentPercent, setAgentStage,

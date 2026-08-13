@@ -14,6 +14,7 @@ Bu modul yalnizca statik gorselleri servis eder:
 Cloudflare tuneli bu sunucuya baglanir (bkz. tools/setup_tunnel.py).
 """
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -22,6 +23,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+
+logger = logging.getLogger(__name__)
 
 # Proje kokunden calistirilmayi bekler (run.py oyle baslatir).
 IMAGES_DIR = Path("generated_images")
@@ -53,9 +56,10 @@ def robots_txt():
 
 
 if __name__ == "__main__":
-    print(f"Atlas image server: http://{HOST}:{PORT}/images (salt-okunur)", flush=True)
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Atlas image server: http://%s:%s/images (salt-okunur)", HOST, PORT)
     try:
         uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
-    except OSError as e:
-        print(f"Image server baslatilamadi ({HOST}:{PORT}): {e}", file=sys.stderr)
+    except OSError:
+        logger.exception("Image server baslatilamadi (%s:%s)", HOST, PORT)
         sys.exit(1)

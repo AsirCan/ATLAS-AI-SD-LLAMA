@@ -6,8 +6,10 @@ LLM skoru, sonra kategori bazli esik, en son whitelist yumusak gecisi.
 Testler bu katmanlarin her birini ayri ayri dogrular.
 """
 
+import pytest
 
 from core.agents.risk_agent import RiskAgent, _find_keyword_hit
+from core.errors import LLMUnavailableError
 from core.pipeline.state import PipelineState
 
 
@@ -153,7 +155,7 @@ class TestWhitelist:
 class TestHataDurumu:
     def test_llm_hatasi_haberi_engeller(self, fake_llm):
         """LLM patlarsa haber guvenli sayilmamali (fail-closed)."""
-        llm = fake_llm(responses=[RuntimeError("ollama down")])
+        llm = fake_llm(responses=[ValueError("gecersiz risk cevabi")])
         agent = RiskAgent(llm)
 
         state = agent._execute(make_state([news("Some ordinary headline")]))
@@ -164,17 +166,22 @@ class TestHataDurumu:
     def test_bir_haberin_hatasi_digerlerini_etkilemez(self, fake_llm):
         llm = fake_llm(
             responses=[
-                RuntimeError("ollama down"),
+                ValueError("gecersiz risk cevabi"),
                 {"risk_score": 1, "categories": [], "safe_to_post": True},
             ]
         )
         agent = RiskAgent(llm)
 
-        state = agent._execute(
-            make_state([news("Broken item"), news("Working item")])
-        )
+        state = agent._execute(make_state([news("Broken item"), news("Working item")]))
 
         assert [i["title"] for i in state.safe_news_items] == ["Working item"]
+
+    def test_ollama_baglanti_hatasi_yutulmaz(self, fake_llm):
+        llm = fake_llm(responses=[LLMUnavailableError("connection refused")])
+        agent = RiskAgent(llm)
+
+        with pytest.raises(LLMUnavailableError):
+            agent._execute(make_state([news("Some ordinary headline")]))
 
 
 def test_bos_haber_listesi_cokmez(fake_llm):

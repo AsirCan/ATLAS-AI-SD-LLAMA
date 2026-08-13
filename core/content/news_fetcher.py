@@ -1,9 +1,12 @@
+import logging
 import random
 
 import feedparser
 
 from core.content.news_memory import get_used_title_set, normalize_title, prune_expired
 from core.runtime.config import USED_NEWS_TTL_DAYS
+
+logger = logging.getLogger(__name__)
 
 RSS_SOURCES = [
     "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -21,8 +24,8 @@ def fetch_all_news(limit=100):
             feed = feedparser.parse(url)
             for entry in feed.entries:
                 all_headlines.append(entry.title.strip())
-        except Exception as e:
-            print(f"RSS Error ({url}): {e}")
+        except Exception:
+            logger.warning("RSS source failed: %s", url, exc_info=True)
             continue
 
     if not all_headlines:

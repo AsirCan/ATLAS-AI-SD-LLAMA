@@ -12,6 +12,7 @@ export function useAgentPoller({
     setAgentPercent,
     setAgentStage,
     setAgentLogs,
+    setAgentError,
     setAgentCancelRequested,
     setStudioStep,
 }) {
@@ -37,9 +38,25 @@ export function useAgentPoller({
 
                 if (appMode === 'studio' && p?.status === 'running') {
                     setStudioStep('generating_agent');
+                } else if (p?.status === 'done') {
+                    clearInterval(interval);
+                    setAgentError(null);
+                    if (appMode === 'studio') setStudioStep('agent_done');
+                } else if (p?.status === 'error') {
+                    clearInterval(interval);
+                    const structuredMessage = Array.isArray(p?.errors)
+                        ? p.errors.find(error => error?.fatal)?.message
+                        : null;
+                    const message = p?.error || structuredMessage || 'Ajan işlemi tamamlanamadı.';
+                    setAgentError(message);
+                    setAgentStatusText(message);
+                    if (appMode === 'studio') setStudioStep('agent_error');
+                } else if (p?.status === 'cancelled') {
+                    clearInterval(interval);
+                    if (appMode === 'studio') setStudioStep('agent_cancelled');
                 }
-            } catch {
-                // ignore polling errors
+            } catch (error) {
+                console.error('Agent polling failed:', error);
             }
         };
 
@@ -49,5 +66,9 @@ export function useAgentPoller({
         }
 
         return () => clearInterval(interval);
-    }, [appMode, studioStep, isAgentRunning, agentStatus, agentJobId]);
+    }, [
+        appMode, studioStep, isAgentRunning, agentStatus, agentJobId,
+        setAgentStatus, setAgentStatusText, setAgentPercent, setAgentStage,
+        setAgentLogs, setAgentError, setAgentCancelRequested, setStudioStep,
+    ]);
 }

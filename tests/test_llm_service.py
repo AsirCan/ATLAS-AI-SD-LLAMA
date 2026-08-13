@@ -1,10 +1,11 @@
 """core/clients/llm.py — LLMService: JSON uretimi, retry, iptal."""
 
-
 import pytest
+import requests
 
 from core.clients import llm as llm_module
 from core.clients.llm import LLMService, _clean_llm_text
+from core.errors import LLMResponseError, LLMUnavailableError
 
 
 @pytest.fixture(autouse=True)
@@ -47,7 +48,8 @@ class TestCleanLlmText:
 class TestChat:
     def test_basarili_cevap_dondurulur(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply("merhaba")),
         )
 
@@ -72,7 +74,7 @@ class TestChat:
         def flaky_post(*_a, **_k):
             attempts["n"] += 1
             if attempts["n"] < 3:
-                raise ConnectionError("baglanti yok")
+                raise requests.ConnectionError("baglanti yok")
             return FakeResponse(ollama_reply("nihayet"))
 
         monkeypatch.setattr(llm_module.requests, "post", flaky_post)
@@ -82,12 +84,16 @@ class TestChat:
 
     def test_tum_denemeler_tukenirse_hata(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
-            lambda *_a, **_k: (_ for _ in ()).throw(ConnectionError("kapali")),
+            llm_module.requests,
+            "post",
+            lambda *_a, **_k: (_ for _ in ()).throw(requests.ConnectionError("kapali")),
         )
 
-        with pytest.raises(Exception, match="Failed to chat with LLM"):
+        with pytest.raises(LLMUnavailableError) as exc:
             LLMService().chat([{"role": "user", "content": "x"}], retries=2)
+
+        assert exc.value.user_message == "Ollama bağlantısı kurulamadı."
+        assert isinstance(exc.value.__cause__, requests.ConnectionError)
 
 
 class TestAsk:
@@ -121,7 +127,8 @@ class TestAsk:
 class TestGenerateJson:
     def test_gecerli_json_parse_edilir(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply('{"risk_score": 3}')),
         )
 
@@ -130,7 +137,8 @@ class TestGenerateJson:
 
     def test_kod_blogu_icindeki_json_parse_edilir(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply('```json\n{"ok": true}\n```')),
         )
 
@@ -140,7 +148,8 @@ class TestGenerateJson:
         replies = ["bu json degil", '{"ok": 1}']
 
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply(replies.pop(0))),
         )
 
@@ -148,11 +157,12 @@ class TestGenerateJson:
 
     def test_surekli_bozuk_json_hata_verir(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply("asla json degil")),
         )
 
-        with pytest.raises(Exception, match="Failed to generate valid JSON"):
+        with pytest.raises(LLMResponseError, match="Valid JSON was not produced"):
             LLMService().generate_json("x", schema={}, retries=2)
 
     def test_format_json_olarak_gonderilir(self, monkeypatch):
@@ -184,7 +194,8 @@ class TestGenerateJson:
 class TestIptal:
     def test_iptal_bayragi_istegi_durdurur(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply("gec kaldi")),
         )
 
@@ -197,7 +208,8 @@ class TestIptal:
     def test_iptal_retry_ile_yutulmaz(self, monkeypatch):
         """Iptal hatasi retry dongusune takilip normal hataya donusmemeli."""
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply("x")),
         )
 
@@ -208,25 +220,28 @@ class TestIptal:
             service.generate_json("x", schema={}, retries=3)
         assert "Cancelled" in str(exc.value)
 
-    def test_iptal_checker_patlarsa_akis_devam_eder(self, monkeypatch):
+    def test_iptal_checker_patlarsa_hata_yutulmaz(self, monkeypatch):
         def broken_checker():
             raise RuntimeError("checker bozuk")
 
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply("tamam")),
         )
 
         service = LLMService()
         service.set_cancel_checker(broken_checker)
 
-        assert service.chat([{"role": "user", "content": "x"}]) == "tamam"
+        with pytest.raises(RuntimeError, match="checker bozuk"):
+            service.chat([{"role": "user", "content": "x"}])
 
 
 class TestGenerateResponse:
     def test_sema_varsa_json_doner(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply('{"a": 5}')),
         )
 
@@ -234,7 +249,8 @@ class TestGenerateResponse:
 
     def test_sema_yoksa_duz_metin_sarilir(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
+            llm_module.requests,
+            "post",
             lambda *_a, **_k: FakeResponse(ollama_reply("duz cevap")),
         )
 
@@ -256,8 +272,9 @@ class TestUnload:
 
     def test_tum_uclar_basarisizsa_false(self, monkeypatch):
         monkeypatch.setattr(
-            llm_module.requests, "post",
-            lambda *_a, **_k: (_ for _ in ()).throw(ConnectionError("yok")),
+            llm_module.requests,
+            "post",
+            lambda *_a, **_k: (_ for _ in ()).throw(requests.ConnectionError("yok")),
         )
 
         assert LLMService().unload() is False
