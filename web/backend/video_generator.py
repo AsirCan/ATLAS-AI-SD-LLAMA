@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 import re
 import subprocess
@@ -11,6 +12,7 @@ from core.clients.llm import get_llm_service, unload_ollama
 from core.clients.sd_client import resim_ciz
 from core.content.news_fetcher import get_top_3_separate_news
 from core.content.news_memory import mark_used_titles
+from core.errors import LLMResponseError, LLMUnavailableError
 from core.runtime.config import SD_HEIGHT, SD_WIDTH
 from core.runtime.tts_config import (
     PIPER_BIN,
@@ -19,6 +21,8 @@ from core.runtime.tts_config import (
     PIPER_EN_MODEL,
     PIPER_MODEL,
 )
+
+logger = logging.getLogger(__name__)
 
 TARGET_NEWS_COUNT = 3
 SCRIPT_WORD_MIN = 24
@@ -109,8 +113,11 @@ def generate_news_script(news_title: str) -> str:
             retries=1,
         )
         return _enforce_word_window(text, SCRIPT_WORD_MIN, SCRIPT_WORD_MAX, news_title)
-    except Exception as e:
-        print(f"Script generation error: {e}")
+    except LLMUnavailableError:
+        logger.exception("Ollama is unavailable while generating the news script")
+        raise
+    except LLMResponseError:
+        logger.exception("Ollama returned an unusable news script; using the deterministic fallback")
         return _enforce_word_window("", SCRIPT_WORD_MIN, SCRIPT_WORD_MAX, news_title)
 
 
@@ -142,8 +149,11 @@ def generate_visual_prompt(news_title: str) -> str:
         if "no text" not in cleaned.lower():
             cleaned += ", no text, no watermark, no logo"
         return cleaned
-    except Exception as e:
-        print(f"Visual prompt generation error: {e}")
+    except LLMUnavailableError:
+        logger.exception("Ollama is unavailable while generating the visual prompt")
+        raise
+    except (LLMResponseError, ValueError):
+        logger.exception("Visual prompt is unusable; using the deterministic fallback")
         return (
             f"A cinematic documentary scene inspired by '{news_title}', single coherent composition, "
             "medium-wide shot, natural lighting, realistic materials, balanced exposure, "
@@ -232,10 +242,10 @@ def _get_whisper_model():
         from faster_whisper import WhisperModel  # noqa: E402
 
         _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
-        print("[Subtitle] Whisper tiny model loaded for subtitle alignment.")
+        logger.info("Whisper tiny model loaded for subtitle alignment")
         return _whisper_model
-    except Exception as e:
-        print(f"[Subtitle] Whisper model load failed: {e}")
+    except Exception:  # Third-party/native boundary: subtitle alignment is optional.
+        logger.exception("Whisper model load failed; disabling forced subtitle alignment")
         return None
 
 
@@ -262,8 +272,8 @@ def _get_word_timestamps(audio_path: Path):
         if not words:
             return None
         return words
-    except Exception as e:
-        print(f"[Subtitle] Whisper transcription failed: {e}")
+    except Exception:  # Third-party/native boundary: proportional timing remains available.
+        logger.exception("Whisper transcription failed; using proportional subtitle timing")
         return None
 
 
@@ -434,11 +444,11 @@ def _write_timed_subtitle_ass(
                     t_end = _format_ass_timestamp(end_s)
                     events.append(f"Dialogue: 0,{t_start},{t_end},Default,,0,0,0,,{chunk_text}")
                 whisper_ok = True
-                print(f"[Subtitle] Whisper alignment OK: {len(padded)} chunks.")
+                logger.info("Whisper subtitle alignment completed with %s chunks", len(padded))
 
     # --- Strategy 2: Proportional math fallback ---
     if not whisper_ok:
-        print("[Subtitle] Using proportional timing fallback.")
+        logger.info("Using proportional subtitle timing fallback")
         chunks = _split_subtitle_chunks(text, words_per_chunk=4)
         if not chunks:
             return None
@@ -527,11 +537,11 @@ def generate_audio(text: str, output_path: Path, *, model_path: str, config_path
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         if result.returncode != 0:
-            print(f"Piper error (code {result.returncode}): {result.stderr}")
+            logger.error("Piper failed with exit code %s: %s", result.returncode, (result.stderr or "").strip())
             return False
         return os.path.exists(output_path)
-    except Exception as e:
-        print(f"Audio generation error: {e}")
+    except (OSError, subprocess.SubprocessError):
+        logger.exception("Piper audio generation failed")
         return False
 
 
@@ -549,10 +559,25 @@ def get_media_duration_seconds(media_path: Path) -> float:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            logger.warning("ffprobe failed for %s: %s", media_path, (result.stderr or "").strip())
             return 0.0
         return float((result.stdout or "0").strip())
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
+        logger.exception("Could not inspect media duration for %s", media_path)
         return 0.0
+    except ValueError:
+        logger.exception("ffprobe returned an invalid duration for %s", media_path)
+        return 0.0
+
+
+def _cleanup_paths(paths) -> None:
+    for path in paths:
+        if path is None:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove temporary file %s", path, exc_info=True)
 
 
 def create_video_clip_ffmpeg(
@@ -618,12 +643,7 @@ def create_video_clip_ffmpeg(
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0 and os.path.exists(output_path):
-        for sf in subtitle_files:
-            if sf and sf.exists():
-                try:
-                    sf.unlink()
-                except Exception:
-                    pass
+        _cleanup_paths(subtitle_files)
         return True
 
     # If timed subtitles fail, retry with static drawtext subtitles.
@@ -638,13 +658,11 @@ def create_video_clip_ffmpeg(
             static_cmd[vf_idx] = f"{base_vf_filter},{static_filter}"
             static_result = subprocess.run(static_cmd, capture_output=True, text=True)
             if static_result.returncode == 0 and os.path.exists(output_path):
-                for sf in subtitle_files:
-                    if sf and sf.exists():
-                        try:
-                            sf.unlink()
-                        except Exception:
-                            pass
-                print(f"Timed subtitles failed, static subtitles used. Error: {result.stderr}")
+                _cleanup_paths(subtitle_files)
+                logger.warning(
+                    "Timed subtitles failed; static subtitles were used: %s",
+                    (result.stderr or "").strip(),
+                )
                 return True
 
     # If subtitles fail, retry once without subtitle filter.
@@ -653,20 +671,18 @@ def create_video_clip_ffmpeg(
         vf_idx = fallback_cmd.index("-vf") + 1
         fallback_cmd[vf_idx] = base_vf_filter
         fallback_result = subprocess.run(fallback_cmd, capture_output=True, text=True)
-        for sf in subtitle_files:
-            if sf and sf.exists():
-                try:
-                    sf.unlink()
-                except Exception:
-                    pass
+        _cleanup_paths(subtitle_files)
         if fallback_result.returncode == 0 and os.path.exists(output_path):
-            print(f"Subtitle render failed, fallback clip generated without subtitles. Error: {result.stderr}")
+            logger.warning(
+                "Subtitle rendering failed; generated the clip without subtitles: %s",
+                (result.stderr or "").strip(),
+            )
             return True
 
-        print(f"FFmpeg clip error: {fallback_result.stderr or result.stderr}")
+        logger.error("FFmpeg clip generation failed: %s", fallback_result.stderr or result.stderr)
         return False
 
-    print(f"FFmpeg clip error: {result.stderr}")
+    logger.error("FFmpeg clip generation failed: %s", result.stderr)
     return False
 
 
@@ -690,13 +706,12 @@ def concat_videos_ffmpeg(video_paths, output_path: Path) -> bool:
         "copy",
         str(output_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"FFmpeg concat error: {result.stderr}")
     try:
-        os.remove(list_file)
-    except Exception:
-        pass
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        _cleanup_paths([list_file])
+    if result.returncode != 0:
+        logger.error("FFmpeg concat failed: %s", result.stderr)
     return os.path.exists(output_path)
 
 

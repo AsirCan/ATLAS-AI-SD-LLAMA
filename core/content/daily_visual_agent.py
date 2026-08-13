@@ -1,4 +1,5 @@
 import difflib
+import logging
 import random
 import time
 
@@ -8,7 +9,10 @@ from core.clients.llm import get_llm_service, unload_ollama
 from core.clients.sd_client import resim_ciz
 from core.content.news_fetcher import RSS_SOURCES
 from core.content.news_memory import get_used_title_set, mark_used_titles, normalize_title, prune_expired
+from core.errors import LLMResponseError
 from core.runtime.config import USED_NEWS_TTL_DAYS
+
+logger = logging.getLogger(__name__)
 
 
 def dunya_gundemini_getir(limit=100):
@@ -21,8 +25,8 @@ def dunya_gundemini_getir(limit=100):
             feed = feedparser.parse(url)
             for entry in feed.entries:
                 tum_basliklar.append(entry.title.strip())
-        except Exception as e:
-            print(f"⚠️ RSS Hatası ({url}): {e}")
+        except Exception:
+            logger.warning("RSS source failed: %s", url, exc_info=True)
             continue
 
     if not tum_basliklar:
@@ -52,8 +56,8 @@ def en_iyi_uc_haberi_sec(haber_listesi_string):
     )
     try:
         return get_llm_service().ask_english(prompt, timeout=60, retries=1)
-    except Exception as e:
-        print(f"LLM Error: {e}")
+    except LLMResponseError:
+        logger.warning("News selection response was invalid; using fallback", exc_info=True)
         return "- A conceptual global tech breakthrough\n- A mysterious space discovery\n- A futuristic city innovation"
 
 
@@ -77,8 +81,8 @@ def sahneyi_birlestir(secilen_3_haber):
     )
     try:
         return get_llm_service().ask_english(prompt, timeout=60, retries=1)
-    except Exception as e:
-        print(f"LLM Error: {e}")
+    except LLMResponseError:
+        logger.warning("Visual direction response was invalid; using fallback", exc_info=True)
         return "A conceptual image showing diverse global events merging together."
 
 

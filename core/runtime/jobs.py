@@ -64,6 +64,7 @@ class Job:
     current_task: str = ""
     result: Any = None
     error: str | None = None
+    errors: list[dict[str, Any]] = field(default_factory=list)
     cancel_requested: bool = False
     seq: int = field(default_factory=lambda: next(_SEQUENCE))
     created_at: float = field(default_factory=time.time)
@@ -110,6 +111,7 @@ class Job:
             "current_task": self.current_task,
             "result": self.result,
             "error": self.error,
+            "errors": [dict(error) for error in self.errors],
             "cancel_requested": self.cancel_requested,
             "logs": self.logs,
         }
@@ -125,6 +127,7 @@ IDLE_SNAPSHOT: dict[str, Any] = {
     "current_task": "",
     "result": None,
     "error": None,
+    "errors": [],
     "cancel_requested": False,
     "logs": [],
 }

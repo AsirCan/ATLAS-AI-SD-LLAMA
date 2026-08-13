@@ -1,6 +1,10 @@
 """core/agents/visual_agent.py — SD prompt normalizasyonu."""
 
+import pytest
+
 from core.agents.visual_agent import VisualDirectorAgent
+from core.errors import LLMUnavailableError
+from core.pipeline.state import PipelineState
 
 
 def make_agent(fake_llm, text=""):
@@ -44,9 +48,7 @@ class TestPromptNormalizasyonu:
 
     def test_etiket_oneki_kaldirilir(self, fake_llm):
         agent = make_agent(fake_llm)
-        out = agent._normalize_prompt(
-            "Final prompt: a wide documentary shot of an empty stadium at dawn", {}
-        )
+        out = agent._normalize_prompt("Final prompt: a wide documentary shot of an empty stadium at dawn", {})
 
         assert not out.lower().startswith("final prompt")
         assert "empty stadium" in out
@@ -108,6 +110,20 @@ class TestYedekPrompt:
         assert "watermark" in neg
         assert "bad anatomy" in neg
         assert "extra fingers" in neg
+
+
+class TestHataAktarimi:
+    def test_ollama_baglanti_hatasi_yutulmaz(self, fake_llm, monkeypatch):
+        agent = make_agent(fake_llm)
+        monkeypatch.setattr(
+            agent.llm,
+            "ask_english",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(LLMUnavailableError("connection refused")),
+        )
+        state = PipelineState(safe_news_items=[{"title": "Haber", "summary": "Özet"}])
+
+        with pytest.raises(LLMUnavailableError):
+            agent._execute(state)
 
 
 class TestGuvenliHaberYoksa:

@@ -1,4 +1,4 @@
-import { Camera, Sparkles, RefreshCw, Instagram, Terminal, Upload, Image as ImageIcon } from 'lucide-react';
+import { AlertTriangle, Camera, CheckCircle2, Sparkles, RefreshCw, Instagram, Terminal, Upload, Image as ImageIcon } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { api } from '../api';
 import InstaConfigModal from '../components/InstaConfigModal';
@@ -12,6 +12,7 @@ export default function StudioPage() {
         handleGenerateNews, handleInstaUpload,
         setShowInstaLogin, isAgentRunning,
         agentStatusText, agentLogs, agentPercent, agentStage,
+        agentError, setAgentError,
         agentCancelRequested, setAgentCancelRequested,
         agentJobId, setAgentJobId,
         addToGallery, setAgentStatus, setAgentStatusText: setAgentStatusTextCtx,
@@ -107,6 +108,8 @@ export default function StudioPage() {
                                 setStudioStep('generating_agent');
                                 setGeneratedNews(null);
                                 setAgentCancelRequested(false);
+                                setAgentError(null);
+                                setAgentStatus('running');
                                 setAgentStatusTextCtx('Ajan başlatılıyor...');
                                 try {
                                     const res = await api.runAutonomousAgent(isLive);
@@ -235,6 +238,48 @@ export default function StudioPage() {
                     </div>
 
                     <LogTerminal logs={agentLogs} className="w-full" />
+                </div>
+            )}
+
+            {/* Agent Error */}
+            {studioStep === 'agent_error' && (
+                <div className="w-full max-w-3xl space-y-5">
+                    <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-center space-y-4">
+                        <AlertTriangle className="w-12 h-12 text-red-500 mx-auto" />
+                        <h2 className="text-2xl font-bold dark:text-white text-gray-900">Ajan işlemi başarısız</h2>
+                        <p className="text-red-600 dark:text-red-300 font-medium">{agentError || agentStatusText || 'Ajan işlemi tamamlanamadı.'}</p>
+                        <button
+                            onClick={() => {
+                                setAgentError(null);
+                                setAgentStatus('idle');
+                                setAgentJobId(null);
+                                setStudioStep('idle');
+                            }}
+                            className="px-5 py-2.5 rounded-xl bg-gray-900 text-white dark:bg-white dark:text-gray-900 font-bold"
+                        >
+                            Studio'ya dön
+                        </button>
+                    </div>
+                    <LogTerminal logs={agentLogs} className="w-full" />
+                </div>
+            )}
+
+            {/* Agent Done / Cancelled */}
+            {(studioStep === 'agent_done' || studioStep === 'agent_cancelled') && (
+                <div className="w-full max-w-2xl rounded-2xl border dark:border-white/10 border-gray-200 dark:bg-dark-900 bg-white p-6 text-center space-y-4 shadow-xl">
+                    <CheckCircle2 className={`w-12 h-12 mx-auto ${studioStep === 'agent_done' ? 'text-emerald-500' : 'text-gray-500'}`} />
+                    <h2 className="text-2xl font-bold">{studioStep === 'agent_done' ? 'Ajan işlemi tamamlandı' : 'Ajan işlemi iptal edildi'}</h2>
+                    <p className="text-gray-500">{agentStatusText}</p>
+                    <button
+                        onClick={() => {
+                            setAgentStatus('idle');
+                            setAgentJobId(null);
+                            setStudioStep('idle');
+                        }}
+                        className="px-5 py-2.5 rounded-xl bg-gray-900 text-white dark:bg-white dark:text-gray-900 font-bold"
+                    >
+                        Studio'ya dön
+                    </button>
                 </div>
             )}
 

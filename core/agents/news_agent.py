@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Any
 
@@ -10,6 +11,8 @@ from core.content.news_memory import get_used_title_set, normalize_title, prune_
 from core.pipeline.state import PipelineState
 from core.runtime.config import USED_NEWS_TTL_DAYS
 
+logger = logging.getLogger(__name__)
+
 
 def _find_keyword_hit(text: str, keywords: list[str]) -> str | None:
     haystack = str(text or "").lower()
@@ -21,7 +24,7 @@ def _find_keyword_hit(text: str, keywords: list[str]) -> str | None:
 
 
 class NewsAgent(BaseAgent):
-    def __init__(self, llm_service: LLMService, rss_urls: list[str] = None):
+    def __init__(self, llm_service: LLMService, rss_urls: list[str] | None = None):
         super().__init__(llm_service)
         # Default RSS list if none provided (single source of truth)
         self.rss_urls = rss_urls or list(RSS_SOURCES)
@@ -44,7 +47,7 @@ class NewsAgent(BaseAgent):
         return state
 
     def _fetch_news(self) -> list[dict[str, str]]:
-        items = []
+        items: list[dict[str, str]] = []
         blocked_keywords = [
             "rape",
             "sexual",
@@ -86,8 +89,9 @@ class NewsAgent(BaseAgent):
                     items.append({"title": title, "link": entry.link, "summary": getattr(entry, "summary", "")})
                     count += 1
                 self.log(f"  -> Fetched {count} items.")
-            except Exception as e:
-                self.log(f"Error fetching RSS {url}: {e}")
+            except Exception:  # Third-party feed boundary; isolate a bad provider.
+                logger.exception("RSS provider failed: %s", url)
+                self.log(f"RSS kaynağı okunamadı: {url}")
         return items
 
     def _score_news(self, items: list[dict[str, str]]) -> list[dict[str, Any]]:
@@ -129,7 +133,8 @@ class NewsAgent(BaseAgent):
                 )
                 scored_items.append(item_data)
 
-            except Exception as e:
-                self.log(f"Skipping item '{item['title'][:20]}...' due to scoring error: {e}")
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("Skipping malformed score for %r", item.get("title", "")[:40], exc_info=True)
+                self.log(f"Skipping item '{item.get('title', '')[:20]}...' due to scoring error: {exc}")
 
         return scored_items

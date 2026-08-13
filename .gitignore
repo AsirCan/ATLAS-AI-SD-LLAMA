@@ -24,7 +24,8 @@ dist/
 *.manifest
 *.spec
 
-# Installer logs
+# Application / installer logs
+logs/
 pip-log.txt
 pip-delete-this-directory.txt
 

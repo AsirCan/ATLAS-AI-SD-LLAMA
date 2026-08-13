@@ -1,14 +1,12 @@
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 from core.clients.llm import LLMService
+from core.errors import CancelledError
 from core.pipeline.state import PipelineState
 
-
-class CancelledError(Exception):
-    """Raised when a cooperative cancel is requested."""
-
-    pass
+logger = logging.getLogger(__name__)
 
 
 class BaseAgent(ABC):
@@ -26,10 +24,7 @@ class BaseAgent(ABC):
         self.cancel_checker = checker
 
     def _is_cancelled(self) -> bool:
-        try:
-            return bool(self.cancel_checker and self.cancel_checker())
-        except Exception:
-            return False
+        return bool(self.cancel_checker and self.cancel_checker())
 
     def _cancel_guard(self, where: str = ""):
         if self._is_cancelled():
@@ -50,9 +45,9 @@ class BaseAgent(ABC):
 
         try:
             updated_state = self._execute(state)
-        except Exception as e:
-            self.log(f"CRITICAL ERROR in {self.name}: {str(e)}")
-            raise e
+        except Exception:
+            logger.exception("Agent failed: %s", self.name)
+            raise
 
         self._cancel_guard("after_process")
         self.log("Process complete. Output State keys updated.")
@@ -69,6 +64,6 @@ class BaseAgent(ABC):
     def log(self, message: str):
         """Structured logging format."""
         full_msg = f"[{self.name}] {message}"
-        print(full_msg)
+        logger.info(full_msg)
         if self.log_callback:
             self.log_callback(full_msg)

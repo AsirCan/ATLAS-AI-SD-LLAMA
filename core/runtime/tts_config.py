@@ -1,6 +1,9 @@
+import logging
 import os
 
 # Proje kok dizini (core klasorunun bir ustu)
+logger = logging.getLogger(__name__)
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -34,8 +37,8 @@ def _first_existing_path(paths):
         try:
             if p and os.path.exists(p):
                 return p
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError):
+            logger.warning("Could not inspect Piper path: %r", p, exc_info=True)
     return None
 
 

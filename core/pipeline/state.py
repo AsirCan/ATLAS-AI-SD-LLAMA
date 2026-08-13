@@ -32,8 +32,34 @@ class PipelineState:
     # Publisher Outputs
     upload_status: dict[str, Any] = field(default_factory=dict)
 
+    # Structured errors carried from agents to API/UI callers.
+    errors: list[dict[str, Any]] = field(default_factory=list)
+
     # Metadata
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def add_error(
+        self,
+        *,
+        stage: str,
+        code: str,
+        message: str,
+        source: str,
+        fatal: bool = True,
+    ) -> dict[str, Any]:
+        error = {
+            "stage": stage,
+            "code": code,
+            "message": message,
+            "source": source,
+            "fatal": fatal,
+        }
+        self.errors.append(error)
+        return error
+
+    @property
+    def fatal_error(self) -> dict[str, Any] | None:
+        return next((error for error in self.errors if error.get("fatal")), None)
 
     def to_dict(self) -> dict[str, Any]:
         """Helper to serialize state for logging."""
@@ -45,4 +71,6 @@ class PipelineState:
             "final_caption_preview": self.final_caption[:50] if self.final_caption else None,
             "scheduled_time": str(self.scheduled_time) if self.scheduled_time else None,
             "upload_status": self.upload_status,
+            "errors": [dict(error) for error in self.errors],
+            "has_fatal_errors": self.fatal_error is not None,
         }

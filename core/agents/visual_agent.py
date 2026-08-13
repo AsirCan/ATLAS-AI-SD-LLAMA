@@ -1,7 +1,7 @@
 import time
 from typing import Any
 
-from core.agents.base import BaseAgent, CancelledError
+from core.agents.base import BaseAgent
 from core.clients.llm import unload_ollama
 from core.pipeline.state import PipelineState
 
@@ -96,52 +96,46 @@ class VisualDirectorAgent(BaseAgent):
         target_news = state.safe_news_items[0]
         self._cancel_guard("before_visual_prompt")
 
-        try:
-            prompt_req = self._build_prompt_request(target_news)
-            llm_prompt = self.llm.ask_english(prompt_req, timeout=60, retries=2)
-            final_prompt = self._normalize_prompt(llm_prompt, target_news)
+        prompt_req = self._build_prompt_request(target_news)
+        llm_prompt = self.llm.ask_english(prompt_req, timeout=60, retries=2)
+        final_prompt = self._normalize_prompt(llm_prompt, target_news)
 
-            state.visual_style = self.DEFAULT_STYLE
-            state.visual_prompts = [final_prompt]
-            self.log(f"Generated Prompt: {final_prompt[:120]}...")
+        state.visual_style = self.DEFAULT_STYLE
+        state.visual_prompts = [final_prompt]
+        self.log(f"Generated Prompt: {final_prompt[:120]}...")
 
-            self._cancel_guard("before_sd_vram_cleanup")
-            unload_ollama()
-            for _ in range(6):
-                self._cancel_guard("sd_vram_cooldown")
-                time.sleep(0.25)
+        self._cancel_guard("before_sd_vram_cleanup")
+        unload_ollama()
+        for _ in range(6):
+            self._cancel_guard("sd_vram_cooldown")
+            time.sleep(0.25)
 
-            self._cancel_guard("before_sd_generation")
-            from core.clients.sd_client import resim_ciz
+        self._cancel_guard("before_sd_generation")
+        from core.clients.sd_client import resim_ciz
 
+        success, image_path, _ = resim_ciz(
+            final_prompt,
+            negative_prompt=self.SD_NEGATIVE_PROMPT,
+            cancel_checker=self.cancel_checker,
+        )
+        self._cancel_guard("after_sd_generation")
+
+        if not success:
+            self._cancel_guard("before_sd_retry")
+            retry_prompt = self._fallback_retry_prompt(target_news)
+            state.visual_prompts.append(retry_prompt)
+            self.log("First SD attempt failed. Retrying with fallback prompt.")
             success, image_path, _ = resim_ciz(
-                final_prompt,
+                retry_prompt,
                 negative_prompt=self.SD_NEGATIVE_PROMPT,
                 cancel_checker=self.cancel_checker,
             )
-            self._cancel_guard("after_sd_generation")
+            self._cancel_guard("after_sd_retry")
 
-            if not success:
-                self._cancel_guard("before_sd_retry")
-                retry_prompt = self._fallback_retry_prompt(target_news)
-                state.visual_prompts.append(retry_prompt)
-                self.log("First SD attempt failed. Retrying with fallback prompt.")
-                success, image_path, _ = resim_ciz(
-                    retry_prompt,
-                    negative_prompt=self.SD_NEGATIVE_PROMPT,
-                    cancel_checker=self.cancel_checker,
-                )
-                self._cancel_guard("after_sd_retry")
-
-            if success and image_path:
-                state.generated_images = [image_path]
-                self.log(f"Image successfully generated: {image_path}")
-            else:
-                self.log("Failed to generate image via SD Client.")
-
-        except CancelledError:
-            raise
-        except Exception as e:
-            self.log(f"Visual Director failed: {e}")
+        if success and image_path:
+            state.generated_images = [image_path]
+            self.log(f"Image successfully generated: {image_path}")
+        else:
+            self.log("Failed to generate image via SD Client.")
 
         return state

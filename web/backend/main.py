@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 # Import core modules
 # Config is safe to import early
@@ -43,6 +46,7 @@ except ImportError as e:
 
     def is_authorized(provided, expected=None):
         return False
+
 
 try:
     from core.clients.insta_client import login_and_upload, login_and_upload_album, prepare_insta_caption
@@ -91,8 +95,8 @@ def setup_safe_piper():
         if os.path.exists(safe_dir):
             try:
                 shutil.rmtree(safe_dir)
-            except Exception as e:
-                print(f"{YELLOW}⚠️ Could not clean safe piper dir: {e}{RESET}")
+            except (OSError, shutil.Error):
+                logger.warning("Could not clean safe Piper directory: %s", safe_dir, exc_info=True)
 
         print(f"{YELLOW}🛠️ Setting up safe Piper environment in {safe_dir}...{RESET}")
         shutil.copytree(original_piper_dir, safe_dir)
@@ -117,8 +121,8 @@ def setup_safe_piper():
         SAFE_PIPER_BIN = os.path.join(safe_dir, "piper.exe")
         print(f"{GREEN}✅ Safe Piper ready: {SAFE_PIPER_BIN}{RESET}")
 
-    except Exception as e:
-        print(f"{RED}❌ Safe Piper setup failed: {e}{RESET}")
+    except (OSError, shutil.Error):
+        logger.exception("Safe Piper setup failed; using configured Piper binary")
         SAFE_PIPER_BIN = PIPER_BIN  # Fallback
 
 
@@ -139,9 +143,7 @@ _DEFAULT_ALLOWED_ORIGINS = [
 ]
 _env_origins = (os.getenv("ALLOWED_ORIGINS") or "").strip()
 ALLOWED_ORIGINS = (
-    [o.strip() for o in _env_origins.split(",") if o.strip()]
-    if _env_origins
-    else _DEFAULT_ALLOWED_ORIGINS
+    [o.strip() for o in _env_origins.split(",") if o.strip()] if _env_origins else _DEFAULT_ALLOWED_ORIGINS
 )
 
 # Token dogrulamasi gerektirmeyen yollar.
@@ -272,11 +274,8 @@ def robots_txt():
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
-    try:
-        response = llm_answer(req.message)
-        return {"response": response}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    response = llm_answer(req.message)
+    return {"response": response}
 
 
 @app.post("/api/image")
@@ -310,8 +309,9 @@ def image_endpoint(req: ImageRequest):
         else:
             return {"success": False, "error": "Image generation failed"}
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:  # HTTP boundary: convert unexpected generation failures safely.
+        logger.exception("Image endpoint failed")
+        raise HTTPException(status_code=500, detail="Görsel üretimi tamamlanamadı.")
 
 
 @app.get("/api/progress")
@@ -323,8 +323,8 @@ async def progress_endpoint():
             data = r.json()
             return data
         return {"progress": 0, "state": {}}
-    except Exception as e:
-        print(f"Progress Error: {e}")
+    except (requests.RequestException, ValueError):
+        logger.warning("Stable Diffusion progress request failed", exc_info=True)
         return {"progress": 0, "state": {}}
 
 
@@ -362,9 +362,9 @@ def news_generate_endpoint():
             }
         else:
             return {"success": False, "error": extra_data or "News generation failed"}
-    except Exception as e:
-        print(f"News Generation Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:  # HTTP boundary around the multi-provider generation flow.
+        logger.exception("Daily news generation endpoint failed")
+        raise HTTPException(status_code=500, detail="Günlük içerik üretimi tamamlanamadı.")
 
 
 # Uzun isler (ajan / carousel / video) job-ID tabanli kayit defterinde izlenir.
@@ -433,9 +433,11 @@ def run_video_generation_task(job_id: str):
         else:
             job.finish("error", task=f"Hata: {result}", error=str(result))
 
-    except Exception as e:
-        print(f"Background Video Gen Error: {e}")
-        job.finish("error", task="Kritik Hata", error=str(e))
+    except Exception:  # Background task boundary: the job must reach a terminal state.
+        logger.exception("Background video generation failed")
+        job.finish(
+            "error", task="Video üretimi beklenmeyen bir hata nedeniyle durdu.", error="Video üretimi tamamlanamadı."
+        )
 
 
 @app.post("/api/news/video_generate")
@@ -449,6 +451,7 @@ async def news_video_generate_endpoint(background_tasks: BackgroundTasks):
 
 
 # --- AGENT LOGIC ---
+
 
 def run_agent_task(job_id: str, live_mode: bool = False):
     job = jobs.registry.get(job_id)
@@ -475,13 +478,37 @@ def run_agent_task(job_id: str, live_mode: bool = False):
 
         # 1. Services Check
         set_stage("services_check", 5, "Servisler kontrol ediliyor (Ollama/SD)...")
-        if not ensure_ollama_running(cancel_checker=is_cancelled):
-            cancel_guard("servis_kontrol")
+        if not ensure_ollama_running(log_callback=job.log, cancel_checker=is_cancelled):
+            if cancel_guard("servis_kontrol"):
+                return
+            message = "Ollama bağlantısı kurulamadı."
+            job.errors = [
+                {
+                    "stage": "services_check",
+                    "code": "ollama_unavailable",
+                    "message": message,
+                    "source": "system_check",
+                    "fatal": True,
+                }
+            ]
+            job.finish("error", task=message, error=message)
             return
         if cancel_guard("servis_kontrol"):
             return
-        if not ensure_sd_running(cancel_checker=is_cancelled):
-            cancel_guard("servis_kontrol")
+        if not ensure_sd_running(log_callback=job.log, cancel_checker=is_cancelled):
+            if cancel_guard("servis_kontrol"):
+                return
+            message = "Stable Diffusion bağlantısı kurulamadı."
+            job.errors = [
+                {
+                    "stage": "services_check",
+                    "code": "stable_diffusion_unavailable",
+                    "message": message,
+                    "source": "system_check",
+                    "fatal": True,
+                }
+            ]
+            job.finish("error", task=message, error=message)
             return
         if cancel_guard("servis_kontrol"):
             return
@@ -527,9 +554,17 @@ def run_agent_task(job_id: str, live_mode: bool = False):
         # Synchrounous run
         final_state = orchestrator.run_pipeline()
 
+        job.errors = [dict(error) for error in final_state.errors]
+
         # If cancel was requested at any time, surface it as a cancelled status
         if is_cancelled() or (final_state.upload_status and final_state.upload_status.get("message") == "Cancelled"):
             job.finish("cancelled", task="İptal edildi.")
+            return
+
+        fatal_error = next((error for error in job.errors if error.get("fatal")), None)
+        if fatal_error:
+            reason = str(fatal_error.get("message") or "Pipeline tamamlanamadı.")
+            job.finish("error", task=reason, error=reason)
             return
 
         if final_state.upload_status and final_state.upload_status.get("success"):
@@ -538,27 +573,24 @@ def run_agent_task(job_id: str, live_mode: bool = False):
                 task="İşlem başarıyla tamamlandı.",
                 result=final_state.upload_status,
             )
-        elif dry_run:
-            job.finish(
-                "done",
-                task="Test Tamamlandı (Dry Run)",
-                result={"images": final_state.generated_images} if final_state.generated_images else None,
-            )
-        else:
-            # If upload status exists, bubble the real reason to UI
-            reason = (final_state.upload_status or {}).get("message")
-            if reason:
-                job.finish("error", task=f"Hata: {reason}", error=reason)
-            else:
-                job.finish(
-                    "error",
-                    task="İşlem tamamlanamadı.",
-                    error="Pipeline bir noktada durdu veya upload başarısız.",
-                )
+            return
 
-    except Exception as e:
-        print(f"Agent Error: {e}")
-        job.finish("error", task="Kritik Hata", error=str(e))
+        reason = (final_state.upload_status or {}).get("message") or "Pipeline tamamlanamadı."
+        job.finish("error", task=str(reason), error=str(reason))
+
+    except Exception:
+        logger.exception("Unhandled agent background task failure")
+        message = "Ajan beklenmeyen bir hata nedeniyle durdu."
+        job.errors = [
+            {
+                "stage": job.stage,
+                "code": "agent_task_failed",
+                "message": message,
+                "source": "run_agent_task",
+                "fatal": True,
+            }
+        ]
+        job.finish("error", task=message, error=message)
 
 
 def _interrupt_stable_diffusion():
@@ -649,9 +681,13 @@ def run_carousel_generation_task(job_id: str):
             # Hata mesajı caption içinde dönüyor agent'ta
             job.finish("error", task="Hata oluştu.", error=str(caption))
 
-    except Exception as e:
-        print(f"Carousel Gen Error: {e}")
-        job.finish("error", task="Kritik Hata", error=str(e))
+    except Exception:  # Background task boundary: the job must reach a terminal state.
+        logger.exception("Background carousel generation failed")
+        job.finish(
+            "error",
+            task="Carousel üretimi beklenmeyen bir hata nedeniyle durdu.",
+            error="Carousel üretimi tamamlanamadı.",
+        )
 
 
 @app.post("/api/carousel/generate")
@@ -686,9 +722,9 @@ async def instagram_upload_endpoint(req: InstaUploadRequest):
                 }
         success, message = login_and_upload(req.image_path, req.caption)
         return {"success": success, "message": message}
-    except Exception as e:
-        print(f"Insta Upload Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:  # Third-party upload boundary.
+        logger.exception("Instagram upload endpoint failed")
+        raise HTTPException(status_code=500, detail="Instagram yüklemesi tamamlanamadı.")
 
 
 @app.post("/api/carousel/upload")
@@ -696,9 +732,9 @@ async def carousel_upload_endpoint(req: InstaCarouselUploadRequest):
     try:
         success, message = login_and_upload_album(req.image_paths, req.caption)
         return {"success": success, "message": message}
-    except Exception as e:
-        print(f"Carousel Upload Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:  # Third-party upload boundary.
+        logger.exception("Instagram carousel upload endpoint failed")
+        raise HTTPException(status_code=500, detail="Carousel yüklemesi tamamlanamadı.")
 
 
 @app.post("/api/instagram/credentials")
@@ -712,8 +748,9 @@ async def instagram_credentials_endpoint(req: InstaCredentialsRequest):
 
         set_instagram_credentials(req.username, req.password)
         return {"success": True, "message": "Credentials saved"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except (OSError, RuntimeError, ValueError):
+        logger.exception("Instagram credentials could not be stored")
+        raise HTTPException(status_code=500, detail="Instagram bilgileri güvenli depoya kaydedilemedi.")
 
 
 @app.post("/api/instagram/session/reset")
@@ -724,8 +761,9 @@ async def instagram_session_reset_endpoint():
 
         ok = reset_instagram_session()
         return {"success": bool(ok)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError:
+        logger.exception("Instagram session file could not be reset")
+        raise HTTPException(status_code=500, detail="Instagram oturumu sıfırlanamadı.")
 
 
 @app.post("/api/instagram/graph-config")
@@ -755,8 +793,9 @@ async def instagram_graph_config_endpoint(req: InstaGraphConfigRequest):
             ]
         )
         return {"success": True, "graph_ready": ready}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError:
+        logger.exception("Instagram Graph configuration could not be written")
+        raise HTTPException(status_code=500, detail="Graph ayarları kaydedilemedi.")
 
 
 @app.get("/api/instagram/graph-config")
@@ -782,17 +821,15 @@ async def instagram_graph_config_get_endpoint():
             "required_count": len(keys),
             "public_base_url": values.get("PUBLIC_BASE_URL", ""),
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError:
+        logger.exception("Instagram Graph configuration could not be read")
+        raise HTTPException(status_code=500, detail="Graph ayarları okunamadı.")
 
 
 @app.get("/api/instagram/token-status")
 async def instagram_token_status_endpoint():
     """Returns Graph access token validity and expiration status."""
-    try:
-        return _graph_token_status_from_env()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return _graph_token_status_from_env()
 
 
 @app.post("/api/imgbb/config")
@@ -801,8 +838,10 @@ async def imgbb_config_post_endpoint(req: ImgBBConfigRequest):
     try:
         _upsert_env_values({"IMGBB_API_KEY": req.imgbb_api_key})
         return {"success": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError:
+        logger.exception("ImgBB configuration could not be written")
+        raise HTTPException(status_code=500, detail="ImgBB ayarı kaydedilemedi.")
+
 
 def _mask_secret(value: str) -> str:
     """Sirri geri dondurmeden 'dolu mu' bilgisini gosterebilmek icin maskeler."""
@@ -830,15 +869,18 @@ async def imgbb_config_get_endpoint():
             "configured": bool(key),
             "masked": _mask_secret(key),
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError:
+        logger.exception("ImgBB configuration could not be read")
+        raise HTTPException(status_code=500, detail="ImgBB ayarı okunamadı.")
 
 
 def remove_file(path: str):
     try:
         os.remove(path)
-    except Exception:
-        pass
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Temporary file could not be removed: %s", path, exc_info=True)
 
 
 def _upsert_env_values(env_updates: dict):
@@ -941,13 +983,14 @@ def _graph_token_status_from_env():
             "app_id": data.get("app_id"),
             "message": "ok" if is_valid else "Token invalid.",
         }
-    except Exception as e:
+    except (requests.RequestException, TypeError, ValueError):
+        logger.warning("Graph token debug request failed", exc_info=True)
         return {
             "success": False,
             "configured": True,
             "is_valid": False,
             "needs_refresh": True,
-            "message": f"Token debug istegi basarisiz: {e}",
+            "message": "Token doğrulama servisine bağlanılamadı.",
         }
 
 
@@ -984,7 +1027,6 @@ async def tts_endpoint(req: TTSRequest, background_tasks: BackgroundTasks):
 
         with open(text_path, "w", encoding="utf-8") as f:
             f.write(req.text)
-
 
         # Run Piper from FULLY ISOLATED environment
         # All paths (Exe, Model, Config, Output, CWD) will be in %TEMP% (Safe, ASCII)
@@ -1082,12 +1124,11 @@ async def tts_endpoint(req: TTSRequest, background_tasks: BackgroundTasks):
 
         # Return file
         return FileResponse(path=output_path, media_type="audio/wav", filename="response.wav")
-    except Exception as e:
-        print(f"{RED}TTS Endpoint Error: {e}{RESET}")
-        import traceback
-
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:  # Native TTS process boundary.
+        logger.exception("TTS endpoint failed")
+        raise HTTPException(status_code=500, detail="Ses üretimi tamamlanamadı.")
 
 
 @app.post("/api/stt")
@@ -1130,40 +1171,42 @@ async def stt_endpoint(file: UploadFile = File(...)):
             except sr.RequestError as e:
                 raise HTTPException(status_code=500, detail=f"STT Error: {e}")
 
-    except Exception as e:
-        print(f"STT Critical Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:  # Decoder and speech-recognition provider boundary.
+        logger.exception("STT endpoint failed")
+        raise HTTPException(status_code=500, detail="Ses tanıma tamamlanamadı.")
     finally:
-        # Cleanup
-        try:
-            if temp_in_path and os.path.exists(temp_in_path):
-                os.remove(temp_in_path)
-            if temp_wav_path and os.path.exists(temp_wav_path):
-                os.remove(temp_wav_path)
-        except Exception:
-            pass
+        for temp_path in (temp_in_path, temp_wav_path):
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    logger.warning("STT temporary file could not be removed: %s", temp_path, exc_info=True)
 
 
 @app.on_event("startup")
 async def startup_event():
-    print(f"{YELLOW}🚀 Initializing Backend Services...{RESET}")
+    from core.runtime.logging_config import configure_logging
+
+    log_path = configure_logging()
+    logger.info("Initializing backend services (log_file=%s)", log_path or "console-only")
 
     # 1. Start/Check Ollama
-    print(f"{YELLOW}🧠 Warming up Ollama...{RESET}")
-    try:
-        ollama_warmup()
-    except Exception as e:
-        print(f"{RED}⚠️ Ollama Error: {e}{RESET}")
+    logger.info("Warming up Ollama")
+    ollama_warmup()
 
     # 1.5 Setup Safe Piper (Tmp Dir)
     setup_safe_piper()
 
     # 2. Start/Check Stable Diffusion
-    print(f"{YELLOW}🎨 Checking Stable Diffusion...{RESET}")
+    logger.info("Checking Stable Diffusion")
     try:
-        ensure_sd_running()
-    except Exception as e:
-        print(f"{RED}⚠️ SD Start Error: {e}{RESET}")
+        ensure_sd_running(log_callback=logger.info)
+    except OSError:
+        logger.exception("Stable Diffusion could not be started during backend startup")
 
 
 def server_options() -> dict:

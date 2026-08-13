@@ -1,3 +1,4 @@
+import logging
 import re
 
 from core.agents.base import BaseAgent
@@ -9,6 +10,8 @@ from core.runtime.config import (
     RISK_WHITELIST_KEYWORDS,
     RISK_WHITELIST_MAX_SCORE,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _find_keyword_hit(text: str, keywords: list[str]) -> str | None:
@@ -93,9 +96,10 @@ class RiskAgent(BaseAgent):
                 else:
                     self.log(f"Blocked item: {item['title']} (Score: {risk_score})")
 
-            except Exception as e:
-                self.log(f"Risk check failed for item '{item['title'][:20]}...'. default BLOCK.")
-                risk_report[item["title"]] = {"error": str(e)}
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("Risk response was invalid for %r", title[:40], exc_info=True)
+                self.log(f"Risk check failed for item '{title[:20]}...'. default BLOCK.")
+                risk_report[title] = {"error": str(exc)}
 
         state.safe_news_items = safe_items
         state.risk_analysis = risk_report

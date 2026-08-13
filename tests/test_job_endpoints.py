@@ -9,6 +9,7 @@ import main as backend
 import pytest
 from fastapi.testclient import TestClient
 
+from core.pipeline.state import PipelineState
 from core.runtime import jobs
 
 pytestmark = pytest.mark.backend
@@ -148,6 +149,60 @@ class TestIlerlemeSorgusu:
 
     def test_ilerleme_ucu_token_ister(self, client):
         assert client.get("/api/agent/progress").status_code == 401
+
+
+class TestAgentHataAktarimi:
+    def test_fatal_pipeline_hatasi_dry_runda_basarili_sayilmaz(self, client, auth, monkeypatch):
+        from core.pipeline import orchestrator as orchestrator_module
+        from core.runtime import system_check
+
+        monkeypatch.setattr(system_check, "ensure_ollama_running", lambda **_kwargs: True)
+        monkeypatch.setattr(system_check, "ensure_sd_running", lambda **_kwargs: True)
+
+        state = PipelineState()
+        state.add_error(
+            stage="news",
+            code="ollama_unavailable",
+            message="Ollama bağlantısı kurulamadı.",
+            source="LLMUnavailableError",
+        )
+        state.upload_status = {"success": False, "message": "Ollama bağlantısı kurulamadı."}
+
+        class FakeOrchestrator:
+            def __init__(self, dry_run=True):
+                self.dry_run = dry_run
+
+            def set_cancel_checker(self, _checker):
+                pass
+
+            def set_logger(self, _callback):
+                pass
+
+            def run_pipeline(self):
+                return state
+
+        monkeypatch.setattr(orchestrator_module, "Orchestrator", FakeOrchestrator)
+        job = jobs.registry.create("agent")
+
+        backend.run_agent_task(job.id, live_mode=False)
+        body = client.get(f"/api/agent/progress/{job.id}", headers=auth).json()
+
+        assert body["status"] == "error"
+        assert body["error"] == "Ollama bağlantısı kurulamadı."
+        assert body["errors"][0]["code"] == "ollama_unavailable"
+        assert "görsel" not in body["error"].lower()
+
+    def test_ollama_servisi_baslatilamazsa_job_running_kalmaz(self, monkeypatch):
+        from core.runtime import system_check
+
+        monkeypatch.setattr(system_check, "ensure_ollama_running", lambda **_kwargs: False)
+        job = jobs.registry.create("agent")
+
+        backend.run_agent_task(job.id)
+
+        assert job.status == "error"
+        assert job.error == "Ollama bağlantısı kurulamadı."
+        assert job.errors[0]["code"] == "ollama_unavailable"
 
 
 class TestIptal:

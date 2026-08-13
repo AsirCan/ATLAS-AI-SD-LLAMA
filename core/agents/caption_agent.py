@@ -1,5 +1,6 @@
 from core.agents.base import BaseAgent
 from core.content.caption_format import format_caption_hashtags_bottom
+from core.errors import LLMResponseError
 from core.pipeline.state import PipelineState
 
 
@@ -33,23 +34,19 @@ class CaptionAgent(BaseAgent):
         Predict engagement score for each.
         """
 
+        result = self.llm.generate_response(prompt, schema=schema)
         try:
-            result = self.llm.generate_response(prompt, schema=schema)
             candidates = result.get("captions", [])
             state.caption_candidates = candidates
 
-            # Python Decision: Select max engagement score
             if candidates:
                 best_caption = max(candidates, key=lambda x: int(x.get("engagement_score", 0)))
-
-                # Construct final text
                 hashtags = result.get("hashtags", "")
                 final_text = format_caption_hashtags_bottom(best_caption.get("text", ""), hashtags)
 
                 state.final_caption = final_text
                 self.log(f"Selected Caption ({best_caption['style']}): {final_text[:30]}...")
-
-        except Exception as e:
-            self.log(f"Caption generation failed: {e}")
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise LLMResponseError("Caption response has an invalid shape") from exc
 
         return state
